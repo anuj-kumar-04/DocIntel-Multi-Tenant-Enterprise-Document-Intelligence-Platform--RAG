@@ -1,0 +1,10 @@
+version: v1
+description: "Naive Baseline: Dense-only pgvector cosine top-5, no query rewriting, no reranking"
+rewrite: false
+multi_query: false
+hybrid: false
+rerank: false
+dense_top_k: 5
+sparse_top_k: 0
+fusion_top_n: 5
+final_k: 5

@@ -1,0 +1,10 @@
+version: v3
+description: "Full Enterprise Stack: History Rewrite + Multi-Query + Hybrid BM25/Dense + RRF + Cross-Encoder Re-ranker + Citation Verifier"
+rewrite: true
+multi_query: true
+hybrid: true
+rerank: true
+dense_top_k: 20
+sparse_top_k: 20
+fusion_top_n: 30
+final_k: 6

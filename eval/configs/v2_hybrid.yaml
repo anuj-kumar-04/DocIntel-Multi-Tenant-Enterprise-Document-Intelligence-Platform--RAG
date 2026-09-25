@@ -1,0 +1,10 @@
+version: v2
+description: "Hybrid Retrieval: Dense + BM25 Full-text + Multi-Query Expansion + Reciprocal Rank Fusion"
+rewrite: false
+multi_query: true
+hybrid: true
+rerank: false
+dense_top_k: 20
+sparse_top_k: 20
+fusion_top_n: 30
+final_k: 8

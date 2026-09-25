@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: "DocIntel Dashboards"
+    orgId: 1
+    folder: "DocIntel"
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

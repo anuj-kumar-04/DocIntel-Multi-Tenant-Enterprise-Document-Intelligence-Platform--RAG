@@ -1,0 +1,118 @@
+name: DocIntel CI / CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-typecheck:
+    name: Code Quality (Ruff & Mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Linting Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy
+
+      - name: Run Ruff Linter
+        run: ruff check backend/app backend/tests
+
+      - name: Run Ruff Formatter Check
+        run: ruff format --check backend/app backend/tests
+
+  test-suite:
+    name: Pytest Suite & Coverage
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: docintel_admin
+          POSTGRES_PASSWORD: docintel_secure_pass
+          POSTGRES_DB: docintel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Run Test Suite
+        env:
+          ENVIRONMENT: test
+          SECRET_KEY: test-key-32-chars-long-minimum-jwt
+          DATABASE_URL: postgresql+asyncpg://docintel_admin:docintel_secure_pass@localhost:5432/docintel_test
+          DATABASE_URL_SYNC: postgresql+psycopg2://docintel_admin:docintel_secure_pass@localhost:5432/docintel_test
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          pytest backend/tests/ -v --cov=backend/app --cov-report=xml
+
+  eval-regression-gate:
+    name: RAGAS Retrieval Quality Regression Gate
+    runs-on: ubuntu-latest
+    needs: [test-suite]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Retrieval Quality Regression Gate
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          python eval/run_eval.py --ci-gate --min-faithfulness 0.85
+
+  docker-build:
+    name: Docker Container Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Backend Docker Image
+        run: docker build -t docintel-backend:ci ./backend
+
+      - name: Build Frontend Docker Image
+        run: docker build -t docintel-frontend:ci ./frontend

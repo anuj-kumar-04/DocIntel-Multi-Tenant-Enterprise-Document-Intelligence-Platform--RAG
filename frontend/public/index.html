@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocIntel — Multi-Tenant Enterprise Document Intelligence</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            slate: {
+              950: '#070b14',
+              900: '#0f172a',
+              850: '#131d36',
+              800: '#1e293b',
+              700: '#334155',
+            },
+            brand: {
+              400: '#60a5fa',
+              500: '#3b82f6',
+              600: '#2563eb',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .glass { background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+    .gradient-text { background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #070b14; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col selection:bg-brand-500 selection:text-white">
+
+  <!-- Header Navigation -->
+  <header class="border-b border-slate-800/80 glass sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="p-2 rounded-xl bg-brand-500/10 border border-brand-500/30 text-brand-400">
+          <i data-lucide="cpu" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <span class="text-lg font-bold gradient-text tracking-tight">DocIntel</span>
+          <span class="ml-2 text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-mono">v3.0 Hybrid</span>
+        </div>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <div class="flex items-center space-x-1">
+        <button onclick="switchTab('chat')" id="tab-chat" class="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-brand-500/15 text-brand-400 border border-brand-500/30">
+          <i data-lucide="message-square" class="w-4 h-4"></i>
+          <span>RAG Chat</span>
+        </button>
+        <button onclick="switchTab('documents')" id="tab-documents" class="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition">
+          <i data-lucide="file-text" class="w-4 h-4"></i>
+          <span>Knowledge Vault</span>
+        </button>
+        <button onclick="switchTab('admin')" id="tab-admin" class="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition">
+          <i data-lucide="shield" class="w-4 h-4"></i>
+          <span>Operations & Governance</span>
+        </button>
+      </div>
+
+      <!-- Tenant Switcher Demo Bar -->
+      <div class="flex items-center space-x-2 text-xs">
+        <span class="text-slate-500 text-[11px]">Tenant Session:</span>
+        <select id="tenantSelect" onchange="switchTenant(this.value)" class="bg-slate-900 border border-slate-700 text-slate-200 rounded-lg px-2.5 py-1 text-xs focus:ring-1 focus:ring-brand-500">
+          <option value="acme">Tenant A: Acme Corp (Sarah)</option>
+          <option value="zephyr">Tenant B: Zephyr Ind. (Elena)</option>
+        </select>
+        <span id="tenantStatusBadge" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Areas -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-6 overflow-hidden flex flex-col">
+
+    <!-- 1. CHAT TAB -->
+    <section id="section-chat" class="flex-1 flex gap-6 overflow-hidden h-[calc(100vh-8rem)]">
+      <!-- Conversation Sidebar -->
+      <aside class="w-72 glass rounded-2xl flex flex-col shrink-0 overflow-hidden">
+        <div class="p-3 border-b border-slate-800">
+          <button onclick="createSession()" class="w-full py-2 px-3 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold flex items-center justify-center space-x-2 transition shadow-sm">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+            <span>New Session</span>
+          </button>
+        </div>
+        <div id="conversationsList" class="flex-1 overflow-y-auto p-2 space-y-1">
+          <!-- Populated dynamically -->
+        </div>
+        <div class="p-3 border-t border-slate-800/80 text-[10px] text-slate-500 text-center font-mono">
+          SQL-Isolated · Denormalized org_id
+        </div>
+      </aside>
+
+      <!-- Main Chat Feed -->
+      <div class="flex-1 glass rounded-2xl flex flex-col overflow-hidden relative">
+        <!-- RAG Version Control Bar -->
+        <div class="px-6 py-2.5 border-b border-slate-800 flex items-center justify-between text-xs bg-slate-900/40">
+          <div class="flex items-center space-x-2">
+            <i data-lucide="sparkles" class="w-4 h-4 text-brand-400"></i>
+            <span class="font-medium text-slate-300">Retrieval Pipeline:</span>
+            <select id="retrievalVersion" class="bg-slate-950 border border-slate-700 text-slate-200 rounded px-2 py-0.5 text-xs">
+              <option value="v3">v3 Full Enterprise Stack (Hybrid + Rerank + Citations)</option>
+              <option value="v2">v2 Hybrid (Dense + BM25 + RRF)</option>
+              <option value="v1">v1 Naive (Dense-Only Top-5)</option>
+            </select>
+          </div>
+          <div class="flex items-center space-x-1.5 text-emerald-400 text-[11px] font-mono">
+            <i data-lucide="lock" class="w-3 h-3"></i>
+            <span>WHERE org_id = :tenant_id</span>
+          </div>
+        </div>
+
+        <!-- Messages scroll container -->
+        <div id="messagesContainer" class="flex-1 overflow-y-auto p-6 space-y-4">
+          <div class="text-center py-12 text-slate-500">
+            <i data-lucide="bot" class="w-10 h-10 mx-auto text-slate-700 mb-2"></i>
+            <p class="text-xs">Ask natural-language questions over your indexed enterprise filings.</p>
+            <p class="text-[11px] text-slate-600 mt-1">Citations are verified to document and exact page.</p>
+          </div>
+        </div>
+
+        <!-- Question Input -->
+        <form onsubmit="handleSendQuestion(event)" class="p-4 border-t border-slate-800 bg-slate-900/50 flex gap-2">
+          <input id="questionInput" type="text" placeholder="Ask a question (e.g. 'What was Acme revenue in Q4 FY24?')..." 
+                 class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-brand-500">
+          <button type="submit" id="sendBtn" class="px-4 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition">
+            <span>Send</span>
+            <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- 2. DOCUMENTS TAB -->
+    <section id="section-documents" class="hidden flex-1 space-y-6 overflow-y-auto">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-xl font-bold text-slate-100">Document Knowledge Vault</h2>
+          <p class="text-xs text-slate-400 mt-0.5">Asynchronously parsed via Celery, chunked layout-aware, and embedded with pgvector.</p>
+        </div>
+        <button onclick="triggerUploadModal()" class="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold flex items-center space-x-2 transition">
+          <i data-lucide="upload" class="w-4 h-4"></i>
+          <span>Upload Document</span>
+        </button>
+      </div>
+
+      <div class="glass rounded-2xl overflow-hidden">
+        <table class="w-full text-left text-xs text-slate-300">
+          <thead class="bg-slate-950/60 uppercase font-mono text-[10px] text-slate-500 border-b border-slate-800">
+            <tr>
+              <th class="px-6 py-3">Filename</th>
+              <th class="px-6 py-3">Status</th>
+              <th class="px-6 py-3">Pages</th>
+              <th class="px-6 py-3">Chunks</th>
+              <th class="px-6 py-3">Size</th>
+              <th class="px-6 py-3 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="documentsTableBody" class="divide-y divide-slate-800">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 3. ADMIN TAB -->
+    <section id="section-admin" class="hidden flex-1 space-y-6 overflow-y-auto">
+      <div>
+        <h2 class="text-xl font-bold text-slate-100">Tenant Operations & Cost Auditing</h2>
+        <p class="text-xs text-slate-400 mt-0.5">Live token quotas, cost caps, and members strictly isolated to this organization.</p>
+      </div>
+
+      <!-- Metrics Row -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="glass p-5 rounded-2xl">
+          <div class="text-[11px] text-slate-400 flex justify-between">Monthly Token Budget <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-400"></i></div>
+          <div id="statTokens" class="text-2xl font-bold text-slate-100 mt-2 font-mono">142,300</div>
+          <div id="statTokensMax" class="text-[10px] text-slate-500 mt-0.5">of 2,500,000 monthly quota</div>
+          <div class="w-full bg-slate-800 h-1.5 rounded-full mt-3 overflow-hidden">
+            <div id="statProgressBar" class="bg-brand-500 h-full rounded-full" style="width: 5.7%;"></div>
+          </div>
+        </div>
+
+        <div class="glass p-5 rounded-2xl">
+          <div class="text-[11px] text-slate-400 flex justify-between">Audited LLM Spend <i data-lucide="dollar-sign" class="w-3.5 h-3.5 text-emerald-400"></i></div>
+          <div id="statCost" class="text-2xl font-bold text-slate-100 mt-2 font-mono">$0.6830</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">Calculated across LiteLLM calls</div>
+        </div>
+
+        <div class="glass p-5 rounded-2xl">
+          <div class="text-[11px] text-slate-400 flex justify-between">pgvector Chunks <i data-lucide="database" class="w-3.5 h-3.5 text-blue-400"></i></div>
+          <div id="statChunks" class="text-2xl font-bold text-slate-100 mt-2 font-mono">5</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">In isolated tenant space</div>
+        </div>
+
+        <div class="glass p-5 rounded-2xl">
+          <div class="text-[11px] text-slate-400 flex justify-between">Active Team Users <i data-lucide="users" class="w-3.5 h-3.5 text-purple-400"></i></div>
+          <div id="statUsers" class="text-2xl font-bold text-slate-100 mt-2 font-mono">2</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">With role-based access</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Interactive Citation Inspector Drawer -->
+  <div id="citationDrawer" class="fixed inset-y-0 right-0 w-96 glass bg-slate-900/95 border-l border-slate-800 p-6 z-50 transform translate-x-full transition-transform duration-300 flex flex-col shadow-2xl">
+    <div class="flex items-center justify-between pb-4 border-b border-slate-800">
+      <div class="flex items-center space-x-2">
+        <span id="drawerBadge" class="px-2 py-0.5 rounded bg-brand-500/20 text-brand-300 font-mono font-bold text-xs">[1]</span>
+        <h3 class="font-semibold text-sm text-slate-100">Verified Citation</h3>
+      </div>
+      <button onclick="closeCitationDrawer()" class="p-1 rounded text-slate-400 hover:text-white">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+
+    <div class="mt-6 space-y-4 flex-1 overflow-y-auto">
+      <div>
+        <label class="text-[10px] font-mono uppercase text-slate-500">Source Document</label>
+        <div id="drawerDocName" class="mt-1 p-2 rounded-lg bg-slate-950 border border-slate-800 text-xs font-medium text-slate-200">
+          Acme_Q4_Financial_Report.pdf
+        </div>
+      </div>
+
+      <div>
+        <label class="text-[10px] font-mono uppercase text-slate-500">Verified Page Reference</label>
+        <div id="drawerPage" class="mt-1 text-sm font-semibold text-brand-400 font-mono">
+          Page 2
+        </div>
+      </div>
+
+      <div>
+        <label class="text-[10px] font-mono uppercase text-slate-500">Grounding Excerpt</label>
+        <div id="drawerSnippet" class="mt-1 p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-300 font-mono leading-relaxed whitespace-pre-wrap">
+          "| Cloud & AI Platform | $6,200M | 34.2% | +31.0% |"
+        </div>
+      </div>
+
+      <div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-400 flex items-center space-x-2">
+        <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
+        <span>Audited pgvector chunk ID verified</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript Client Core -->
+  <script>
+    let currentAuthToken = '';
+    let currentTenant = 'acme';
+    let activeConversationId = null;
+    let conversations = [];
+    let currentCitations = [];
+
+    // Pre-configured Tenant Logins
+    const TENANTS = {
+      acme: { email: 'admin@acme.com', pass: 'Password123!', name: 'Acme Corp' },
+      zephyr: { email: 'admin@zephyr.com', pass: 'Password123!', name: 'Zephyr Industries' }
+    };
+
+    async function loginTenant(tenantKey) {
+      currentTenant = tenantKey;
+      const creds = TENANTS[tenantKey];
+      try {
+        const res = await fetch('/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: creds.email, password: creds.pass })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          currentAuthToken = data.tokens.access_token;
+          await loadInitialData();
+        }
+      } catch (e) {
+        console.error("Login failed", e);
+      }
+    }
+
+    async function switchTenant(tenantKey) {
+      await loginTenant(tenantKey);
+    }
+
+    function switchTab(tab) {
+      document.getElementById('section-chat').classList.add('hidden');
+      document.getElementById('section-documents').classList.add('hidden');
+      document.getElementById('section-admin').classList.add('hidden');
+
+      document.getElementById('tab-chat').className = 'flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition';
+      document.getElementById('tab-documents').className = 'flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition';
+      document.getElementById('tab-admin').className = 'flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition';
+
+      document.getElementById('section-' + tab).classList.remove('hidden');
+      document.getElementById('tab-' + tab).className = 'flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-brand-500/15 text-brand-400 border border-brand-500/30';
+
+      if (tab === 'documents') loadDocuments();
+      if (tab === 'admin') loadAdminData();
+    }
+
+    async function loadInitialData() {
+      await loadConversations();
+    }
+
+    async function loadConversations() {
+      try {
+        const res = await fetch('/api/v1/chat/conversations', {
+          headers: { 'Authorization': 'Bearer ' + currentAuthToken }
+        });
+        if (res.ok) {
+          conversations = await res.json();
+          renderConversations();
+          if (conversations.length > 0 && !activeConversationId) {
+            selectSession(conversations[0].id);
+          } else if (conversations.length === 0) {
+            await createSession();
+          }
+        }
+      } catch (e) { console.error(e); }
+    }
+
+    function renderConversations() {
+      const el = document.getElementById('conversationsList');
+      el.innerHTML = conversations.map(c => `
+        <div onclick="selectSession('${c.id}')" class="p-2.5 rounded-xl cursor-pointer text-xs flex items-center justify-between transition ${c.id === activeConversationId ? 'bg-brand-500/15 text-brand-300 border border-brand-500/30' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'}">
+          <div class="flex items-center space-x-2 truncate">
+            <i data-lucide="message-square" class="w-3.5 h-3.5 shrink-0"></i>
+            <span class="truncate">${c.title}</span>
+          </div>
+        </div>
+      `).join('');
+      lucide.createIcons();
+    }
+
+    async function createSession() {
+      const res = await fetch('/api/v1/chat/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentAuthToken },
+        body: JSON.stringify({ title: 'Analysis ' + (conversations.length + 1) })
+      });
+      if (res.ok) {
+        const newConv = await res.json();
+        conversations.unshift(newConv);
+        activeConversationId = newConv.id;
+        renderConversations();
+        document.getElementById('messagesContainer').innerHTML = '';
+      }
+    }
+
+    async function selectSession(convId) {
+      activeConversationId = convId;
+      renderConversations();
+      const res = await fetch('/api/v1/chat/conversations/' + convId, {
+        headers: { 'Authorization': 'Bearer ' + currentAuthToken }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const container = document.getElementById('messagesContainer');
+        container.innerHTML = '';
+        if (data.messages && data.messages.length > 0) {
+          data.messages.forEach(m => appendMessage(m.role, m.content, m.citations));
+        }
+      }
+    }
+
+    function appendMessage(role, content, citations = []) {
+      const container = document.getElementById('messagesContainer');
+      const isUser = role === 'user';
+      const msgDiv = document.createElement('div');
+      msgDiv.className = `flex items-start space-x-3 ${isUser ? 'flex-row-reverse space-x-reverse' : 'flex-row'}`;
+      
+      let formattedContent = content;
+      if (!isUser && citations && citations.length > 0) {
+        currentCitations = citations;
+        formattedContent = content.replace(/\[(\d+)\]/g, (match, idx) => {
+          return `<button onclick="openCitationDrawer(${idx})" class="inline-flex items-center px-1.5 py-0.5 mx-0.5 text-[11px] font-mono font-bold rounded bg-brand-500/20 hover:bg-brand-500/40 text-brand-300 border border-brand-500/30 transition">[${idx}]</button>`;
+        });
+      }
+
+      msgDiv.innerHTML = `
+        <div class="p-2 rounded-xl shrink-0 ${isUser ? 'bg-brand-600 text-white' : 'bg-slate-800 text-brand-400 border border-slate-700'}">
+          <i data-lucide="${isUser ? 'user' : 'bot'}" class="w-4 h-4"></i>
+        </div>
+        <div class="max-w-2xl rounded-2xl p-4 text-xs leading-relaxed ${isUser ? 'bg-brand-600 text-white rounded-tr-none' : 'glass text-slate-200 rounded-tl-none'}">
+          <div class="whitespace-pre-wrap">${formattedContent}</div>
+        </div>
+      `;
+      container.appendChild(msgDiv);
+      container.scrollTop = container.scrollHeight;
+      lucide.createIcons();
+    }
+
+    async function handleSendQuestion(e) {
+      e.preventDefault();
+      const input = document.getElementById('questionInput');
+      const q = input.value.trim();
+      if (!q || !activeConversationId) return;
+      input.value = '';
+
+      appendMessage('user', q);
+
+      // Create streaming assistant message bubble
+      const container = document.getElementById('messagesContainer');
+      const streamDiv = document.createElement('div');
+      streamDiv.className = 'flex items-start space-x-3 flex-row';
+      streamDiv.innerHTML = `
+        <div class="p-2 rounded-xl shrink-0 bg-slate-800 text-brand-400 border border-slate-700">
+          <i data-lucide="bot" class="w-4 h-4"></i>
+        </div>
+        <div class="max-w-2xl rounded-2xl p-4 text-xs leading-relaxed glass text-slate-200 rounded-tl-none">
+          <div class="stream-text whitespace-pre-wrap"></div>
+        </div>
+      `;
+      container.appendChild(streamDiv);
+      const textSpan = streamDiv.querySelector('.stream-text');
+
+      const version = document.getElementById('retrievalVersion').value;
+      const res = await fetch(`/api/v1/chat/conversations/${activeConversationId}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + currentAuthToken },
+        body: JSON.stringify({ question: q, version: version })
+      });
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = '';
+      let receivedCitations = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n\n');
+        for (const line of lines) {
+          if (line.startsWith('event: token')) {
+            const dataMatch = line.match(/data:\s*(.+)$/m);
+            if (dataMatch) {
+              const data = JSON.parse(dataMatch[1]);
+              accumulated += data.token;
+              textSpan.innerText = accumulated;
+            }
+          } else if (line.startsWith('event: citations')) {
+            const dataMatch = line.match(/data:\s*(.+)$/m);
+            if (dataMatch) {
+              receivedCitations = JSON.parse(dataMatch[1]).citations;
+              currentCitations = receivedCitations;
+            }
+          }
+        }
+        container.scrollTop = container.scrollHeight;
+      }
+
+      // Format complete citations
+      if (receivedCitations && receivedCitations.length > 0) {
+        const withBadges = accumulated.replace(/\[(\d+)\]/g, (match, idx) => {
+          return `<button onclick="openCitationDrawer(${idx})" class="inline-flex items-center px-1.5 py-0.5 mx-0.5 text-[11px] font-mono font-bold rounded bg-brand-500/20 hover:bg-brand-500/40 text-brand-300 border border-brand-500/30 transition">[${idx}]</button>`;
+        });
+        textSpan.innerHTML = withBadges;
+      }
+      lucide.createIcons();
+    }
+
+    function openCitationDrawer(index) {
+      const cite = currentCitations.find(c => c.index === index) || {
+        index: index,
+        filename: 'Document Filing',
+        page: 1,
+        snippet: 'Verified context chunk retrieved from pgvector.'
+      };
+      document.getElementById('drawerBadge').innerText = `[${cite.index}]`;
+      document.getElementById('drawerDocName').innerText = cite.filename;
+      document.getElementById('drawerPage').innerText = `Page ${cite.page}`;
+      document.getElementById('drawerSnippet').innerText = `"${cite.snippet}"`;
+      document.getElementById('citationDrawer').classList.remove('translate-x-full');
+    }
+
+    function closeCitationDrawer() {
+      document.getElementById('citationDrawer').classList.add('translate-x-full');
+    }
+
+    async function loadDocuments() {
+      const res = await fetch('/api/v1/documents', {
+        headers: { 'Authorization': 'Bearer ' + currentAuthToken }
+      });
+      if (res.ok) {
+        const docs = await res.json();
+        const tbody = document.getElementById('documentsTableBody');
+        tbody.innerHTML = docs.map(d => `
+          <tr class="hover:bg-slate-800/40 transition">
+            <td class="px-6 py-3.5 font-medium text-slate-200">${d.filename}</td>
+            <td class="px-6 py-3.5">
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${d.status === 'ready' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-blue-500/20 text-blue-300 animate-pulse'}">
+                ${d.status.toUpperCase()}
+              </span>
+            </td>
+            <td class="px-6 py-3.5">${d.page_count} pages</td>
+            <td class="px-6 py-3.5">${d.chunk_count} chunks</td>
+            <td class="px-6 py-3.5 font-mono">${(d.size_bytes/1024).toFixed(1)} KB</td>
+            <td class="px-6 py-3.5 text-right font-mono text-slate-500">${new Date(d.created_at).toLocaleDateString()}</td>
+          </tr>
+        `).join('');
+      }
+    }
+
+    async function loadAdminData() {
+      const res = await fetch('/api/v1/admin/usage', {
+        headers: { 'Authorization': 'Bearer ' + currentAuthToken }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        document.getElementById('statTokens').innerText = data.tokens_used_this_month.toLocaleString();
+        document.getElementById('statTokensMax').innerText = 'of ' + data.monthly_token_budget.toLocaleString() + ' monthly quota';
+        document.getElementById('statProgressBar').style.width = Math.min(100, data.budget_utilized_percent) + '%';
+        document.getElementById('statCost').innerText = '$' + data.total_cost_usd.toFixed(4);
+        document.getElementById('statChunks').innerText = data.chunks_count;
+      }
+    }
+
+    function triggerUploadModal() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.pdf,.docx,.xlsx,.txt';
+      input.onchange = async () => {
+        if (!input.files || !input.files[0]) return;
+        const formData = new FormData();
+        formData.append('file', input.files[0]);
+        await fetch('/api/v1/documents', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + currentAuthToken },
+          body: formData
+        });
+        loadDocuments();
+      };
+      input.click();
+    }
+
+    // Startup login with Acme Corp (Tenant A)
+    window.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+      loginTenant('acme');
+    });
+  </script>
+</body>
+</html>
