@@ -87,9 +87,15 @@ def create_application() -> FastAPI:
     app.include_router(api_v1_router)
 
     # 6. Mount public directory for zero-dependency standalone dashboard
-    public_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "public"))
-    if os.path.exists(public_dir):
-        app.mount("/app", StaticFiles(directory=public_dir, html=True), name="static_app")
+    static_candidates = [
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "public")),
+        "/app/static",
+    ]
+    for candidate in static_candidates:
+        if os.path.exists(candidate) and os.path.isdir(candidate):
+            app.mount("/app", StaticFiles(directory=candidate, html=True), name="static_app")
+            break
 
     @app.get("/", tags=["Root"])
     async def root():

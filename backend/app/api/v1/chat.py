@@ -43,6 +43,7 @@ async def create_conversation(
     db.add(conv)
     await db.commit()
     await db.refresh(conv)
+    conv.messages = []
     return conv
 
 
@@ -58,6 +59,7 @@ async def list_conversations(
             Conversation.org_id == current_user.org_id,
             Conversation.user_id == current_user.id,
         )
+        .options(selectinload(Conversation.messages))
         .order_by(Conversation.updated_at.desc())
     )
     result = await db.execute(stmt)

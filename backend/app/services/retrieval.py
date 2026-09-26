@@ -183,13 +183,13 @@ class RetrievalEngine:
         vec_str = "[" + ",".join(f"{x:.6f}" for x in query_vec) + "]"
         query = text(
             """
-            SELECT c.id::text, c.content, c.page_number, c.document_id::text,
+            SELECT CAST(c.id AS text), c.content, c.page_number, CAST(c.document_id AS text),
                    c.section_title, c.element_type, d.filename,
-                   1 - (c.embedding <=> :qvec::vector) AS score
+                   1 - (c.embedding <=> CAST(:qvec AS vector)) AS score
             FROM chunks c
             JOIN documents d ON c.document_id = d.id
             WHERE c.org_id = :org_id
-            ORDER BY c.embedding <=> :qvec::vector
+            ORDER BY c.embedding <=> CAST(:qvec AS vector)
             LIMIT :limit;
             """
         )
@@ -212,6 +212,7 @@ class RetrievalEngine:
             ]
         except Exception as e:
             logger.warning(f"Dense vector search failed: {e}. Falling back to content search.")
+            await self.db.rollback()
             return []
 
     async def sparse_search(
@@ -225,7 +226,7 @@ class RetrievalEngine:
         # Try websearch_to_tsquery for natural query phrasing
         query = text(
             """
-            SELECT c.id::text, c.content, c.page_number, c.document_id::text,
+            SELECT CAST(c.id AS text), c.content, c.page_number, CAST(c.document_id AS text),
                    c.section_title, c.element_type, d.filename,
                    ts_rank_cd(c.content_tsv, websearch_to_tsquery('english', :q)) AS score
             FROM chunks c
@@ -256,11 +257,12 @@ class RetrievalEngine:
                 ]
         except Exception as e:
             logger.warning(f"Full-text search fallback triggered: {e}")
+            await self.db.rollback()
 
         # Fallback ILIKE search if TSVECTOR search yielded no match or errored
         fallback_query = text(
             """
-            SELECT c.id::text, c.content, c.page_number, c.document_id::text,
+            SELECT CAST(c.id AS text), c.content, c.page_number, CAST(c.document_id AS text),
                    c.section_title, c.element_type, d.filename, 0.5 AS score
             FROM chunks c
             JOIN documents d ON c.document_id = d.id
@@ -290,6 +292,7 @@ class RetrievalEngine:
                 for r in rows
             ]
         except Exception:
+            await self.db.rollback()
             return []
 
     async def get_chunks_by_ids(
@@ -301,28 +304,33 @@ class RetrievalEngine:
 
         query = text(
             """
-            SELECT c.id::text, c.content, c.page_number, c.document_id::text,
+            SELECT CAST(c.id AS text), c.content, c.page_number, CAST(c.document_id AS text),
                    c.section_title, c.element_type, d.filename
             FROM chunks c
             JOIN documents d ON c.document_id = d.id
-            WHERE c.id::text = ANY(:chunk_ids)
+            WHERE CAST(c.id AS text) = ANY(:chunk_ids)
               AND c.org_id = :org_id;
             """
         )
-        result = await self.db.execute(query, {"chunk_ids": chunk_ids, "org_id": org_id})
-        rows = result.fetchall()
-        lookup = {}
-        for r in rows:
-            lookup[str(r[0])] = {
-                "id": str(r[0]),
-                "content": r[1],
-                "page_number": r[2],
-                "document_id": str(r[3]),
-                "section_title": r[4],
-                "element_type": r[5],
-                "filename": r[6],
-            }
-        return lookup
+        try:
+            result = await self.db.execute(query, {"chunk_ids": chunk_ids, "org_id": org_id})
+            rows = result.fetchall()
+            lookup = {}
+            for r in rows:
+                lookup[str(r[0])] = {
+                    "id": str(r[0]),
+                    "content": r[1],
+                    "page_number": r[2],
+                    "document_id": str(r[3]),
+                    "section_title": r[4],
+                    "element_type": r[5],
+                    "filename": r[6],
+                }
+            return lookup
+        except Exception as e:
+            logger.warning(f"Fetch chunks by ids failed: {e}")
+            await self.db.rollback()
+            return {}
 
     async def retrieve(
         self,
@@ -350,11 +358,10 @@ class RetrievalEngine:
         # Step 3: Embed queries
         query_vectors = [embedding_service.embed_query(q) for q in queries]
 
-        # Step 4: Parallel dense and sparse search
-        dense_tasks = [
-            self.dense_search(qvec, org_id, cfg.dense_top_k) for qvec in query_vectors
-        ]
-        dense_results = await asyncio.gather(*dense_tasks)
+        # Step 4: Sequential dense and sparse search to ensure AsyncSession safety
+        dense_results = []
+        for qvec in query_vectors:
+            dense_results.append(await self.dense_search(qvec, org_id, cfg.dense_top_k))
 
         ranked_lists: list[list[str]] = []
         item_cache: dict[str, dict[str, Any]] = {}
@@ -369,10 +376,9 @@ class RetrievalEngine:
             ranked_lists.append(id_list)
 
         if cfg.hybrid:
-            sparse_tasks = [
-                self.sparse_search(q, org_id, cfg.sparse_top_k) for q in queries
-            ]
-            sparse_results = await asyncio.gather(*sparse_tasks)
+            sparse_results = []
+            for q in queries:
+                sparse_results.append(await self.sparse_search(q, org_id, cfg.sparse_top_k))
             for res in sparse_results:
                 id_list = []
                 for item in res:
