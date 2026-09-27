@@ -15,37 +15,41 @@ In modern enterprises, critical knowledge is siloed across thousands of annual r
 **DocIntel solves this end-to-end**:
 - **Multi-Tenancy**: Organization A can never search, see, or cite documents belonging to Organization B. Tenant isolation is enforced in SQL queries (`WHERE org_id = :org_id`), not in application code.
 - **Asynchronous Ingestion**: Heavy document parsing and embedding are handled by background Celery worker processes with retry policies, keeping web requests fast and non-blocking.
-- **Hybrid Retrieval (Dense + Sparse)**: Combines semantic vector similarity (pgvector) with keyword precision (PostgreSQL BM25 / `tsvector`), fused with **Reciprocal Rank Fusion (RRF)**.
-- **Cross-Encoder Re-ranking**: Evaluates joint query-document interactions to ensure that the top candidates are genuinely relevant.
-- **Strict Grounded Citations**: Answers must cite their source using bracketed numbers `[1]`, `[2]`. Any hallucinated citations are automatically stripped, and clicking a citation badge opens the exact source excerpt and page number.
-- **Cost & Quota Governance**: Enforces monthly token budgets per tenant, caches frequent questions with a sub-millisecond Redis semantic vector cache, and routes LLM requests across Groq, Gemini, and OpenAI with automatic fallback.
+- **Section-Aware Hybrid Retrieval (Dense + Sparse BM25)**: Combines semantic vector similarity (pgvector) with full-text search over concatenated `(to_tsvector(section_title) || content_tsv)`. This ensures standalone tables and lists separated from their parent headings across page boundaries are still retrieved with high precision.
+- **Invisible PDF Unicode Sanitization**: Automatically cleans directional formatting artifacts (`\u202d` LTR override, `\u202c` POP, zero-width spaces) common in Google Docs and Word PDF exports that disrupt tokenizers and text matchers.
+- **Cross-Encoder Re-ranking**: Evaluates joint query-document interactions (including section titles) to ensure that the top candidates are genuinely relevant.
+- **Strict Grounded Citations**: Answers must cite their source using bracketed numbers `[1]`, `[2]`. Any hallucinated citations are automatically stripped, and clicking a citation badge opens the exact source excerpt, section name, and page number.
+- **Cost & Quota Governance**: Enforces monthly token budgets per tenant, caches frequent questions with a sub-millisecond Redis semantic vector cache, and routes LLM requests across Groq, Gemini, OpenAI, and a local grounded engine with automatic fallback.
 
 ---
 
 ## 2. How the Pieces Connect
 
 ```
-1. Upload Document ──▶ S3 / MinIO ──▶ Celery Task ──▶ Docling / PyMuPDF ──▶ Chunking ──▶ Embeddings ──▶ pgvector Chunks
-                                                                                                          │
-2. User Question ──▶ Semantic Cache (Redis) ──Hit──▶ Return Cached Answer + Citations                    │
-                           │ Miss                                                                         │
-                           ▼                                                                              │
-                   Query Rewriter (Standalone + Multi-Query)                                              │
-                           │                                                                              │
-                           ▼                                                                              │
-                   Parallel Search: Dense (pgvector) + Sparse (BM25) ◀────────────────────────────────────┘
+1. Upload Document ──▶ S3 / MinIO ──▶ Celery Task ──▶ PyMuPDF / Extraction ──▶ Unicode Clean & Chunking ──▶ Embeddings ──▶ pgvector Chunks
+                                                                                                                              │
+2. User Question ──▶ Semantic Cache (Redis) ──Hit──▶ Return Cached Answer + Citations                                        │
+                           │ Miss                                                                                             │
+                           ▼                                                                                                  │
+                   Query Rewriter (Standalone + Multi-Query Paraphraser)                                                      │
+                           │                                                                                                  │
+                           ▼                                                                                                  │
+                   Parallel Search: Dense (pgvector HNSW) + Sparse (BM25 on Title + Content) ◀────────────────────────────────┘
                            │
                            ▼
                    Reciprocal Rank Fusion (RRF) ──▶ Top 30 Candidates
                            │
                            ▼
-                   Cross-Encoder Re-ranker ──▶ Top 6 Grounding Chunks
+                   Cross-Encoder Re-ranker (Scoring Title + Content) ──▶ Top 6 Grounding Chunks
                            │
                            ▼
-                   LiteLLM Multi-Provider Router (Groq Llama 3.3 70B / Gemini Flash)
+                   Section-Aware Context Builder (Injects Page, Filename & Section Metadata)
                            │
                            ▼
-                   Citation Post-Check (Validate [n], purge hallucinations)
+                   Multi-Model Router Cascade (Groq Qwen/Llama ➡️ Gemini Flash ➡️ OpenAI ➡️ Local Engine)
+                           │
+                           ▼
+                   Citation Post-Check (Validate [n], purge hallucinated indices)
                            │
                            ▼
                    SSE Streaming Response (Token-by-token + verified citation cards)
@@ -104,5 +108,8 @@ Then visit:
 | **Cross-Encoder Re-ranker** | A neural model that jointly computes cross-attention over the query and document chunk simultaneously, achieving significantly higher precision than bi-encoders at the cost of higher compute per candidate. |
 | **Semantic Cache** | A caching mechanism in Redis that embeds incoming questions and returns pre-computed answers if the cosine similarity against a previously asked question exceeds $0.97$. |
 | **Server-Sent Events (SSE)** | A lightweight HTTP standard where a server pushes real-time text updates (tokens, citations, completion events) over a single persistent connection without the bidirectional overhead of WebSockets. |
+| **Section-Aware Retrieval** | Full-text and vector querying that concatenates section titles with content bodies `(to_tsvector(section_title) || content_tsv)`. This guarantees that isolated tables or lists whose headings reside on previous pages are never lost during retrieval. |
+| **Bidirectional Unicode Sanitization** | Removing invisible formatting markers (`\u202d`, `\u202c`, zero-width spaces, BOM) injected by word processors and PDF printers that corrupt lexical search and tokenization. |
+| **Citation Verification Engine** | A deterministic post-processor that scans LLM answers for bracketed citations `[n]`, cross-references them against the retrieved source map, strips hallucinated citation numbers, and pairs valid citations with page and section metadata. |
 | **LiteLLM** | A unified proxy and router library that standardizes calls to OpenAI, Groq, Anthropic, and Gemini, providing automatic fallback routing and token cost tracking. |
 | **RAGAS** | Retrieval Augmented Generation Assessment, an industry evaluation framework measuring Faithfulness, Answer Relevancy, Context Precision, and Context Recall against ground-truth benchmarks. |

@@ -72,8 +72,10 @@ Detailed metric analysis and regression gate specifications are documented in [E
 
 - [x] **Zero-Leak Multi-Tenancy**: Denormalized `org_id` on chunks enforced in every SQL `WHERE` clause.
 - [x] **40+ Automated Tests**: Comprehensive pytest suite covering auth, RBAC, ingestion, retrieval, and tenant isolation.
-- [x] **Layout-Aware Chunking**: Preserves tables whole as markdown; records page numbers on every chunk.
-- [x] **Verified Citations**: Emits inline `[1]`, `[2]` chips with document and page source snippets; purges hallucinated citations.
+- [x] **Layout-Aware Chunking & Section Linking**: Preserves tables whole as markdown; concatenates section titles with content tsvectors to resolve cross-page table splits.
+- [x] **Bidirectional Unicode Sanitizer**: Automatically cleans invisible control markers (`\u202d`, `\u202c`, zero-width spaces) from Google Docs/Word PDF exports.
+- [x] **Verified Citations**: Emits inline `[1]`, `[2]` chips with document, section, and page source snippets; purges hallucinated citations.
+- [x] **Multi-Model Cascade**: Ultra-low latency streaming via Groq Qwen/Llama with automatic failover to Gemini Flash, OpenAI, and local grounded extraction.
 - [x] **Semantic Caching**: Sub-millisecond Redis vector cache for cosine similarity $>0.97$.
 - [x] **Token Budget Governance**: Monthly quota enforcement returning HTTP 429 when exhausted.
 - [x] **CI/CD Quality Gate**: Ruff linting, Mypy type-checking, test suite with coverage, and RAGAS regression gate.

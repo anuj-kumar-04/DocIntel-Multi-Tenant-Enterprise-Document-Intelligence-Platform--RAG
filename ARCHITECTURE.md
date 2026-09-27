@@ -81,9 +81,63 @@ $$\text{RRF\_Score}(d) = \sum_{m \in M} \frac{1}{k + \text{rank}_m(d)} \quad (k 
 Incoming Request
     │
     ▼
-[Groq: Llama 3.3 70B] ────Timeout / Rate Limit (429)────▶ [Google Gemini 2.0 Flash]
-    │                                                               │
-    ▼ (Success)                                                     ▼ (Fallback Success)
-Stream Tokens                                                 Stream Tokens
+[Groq: Qwen 27B / Llama 3.3] ───Timeout / Rate Limit (429)───▶ [Google Gemini Flash]
+    │                                                                   │
+    ▼ (Success)                                                         ▼ (Fallback Success)
+Stream Tokens                                                     Stream Tokens
+                                                                        │
+                                                                        ▼ (If all fail)
+                                                          [Local Smart Grounded Engine]
 ```
 - Guarantees 99.99% system availability even during third-party LLM outages.
+
+---
+
+## 6. ADR 6: Handling Cross-Chunk Boundary Splits (Section-Title Concatenation)
+
+### The Problem
+In enterprise documents and academic course notes, section headings frequently appear at the bottom of page $N$, while the accompanying Markdown comparison table or data list appears at the top of page $N+1$. 
+- Chunk $N$: Contains `## Difference Between File System and DBMS` (no table body).
+- Chunk $N+1$: Contains `| Basics | File System | DBMS | ...` (no occurrence of the word *"Difference"* in the body).
+
+Under naive sparse search, searching for *"Difference Between File System and DBMS"* produces a false negative for Chunk $N+1$ because the body text lacks the word *"Difference"*. The LLM only receives the empty heading chunk and triggers a refusal.
+
+### The Architecture Solution
+1. **Database-Level tsvector Concatenation**:
+   ```sql
+   SELECT c.id, c.content, c.page_number, c.section_title
+   FROM chunks c
+   WHERE c.org_id = :org_id
+     AND (to_tsvector('english', COALESCE(c.section_title, '')) || c.content_tsv) 
+         @@ plainto_tsquery('english', :q)
+   ORDER BY score DESC;
+   ```
+2. **Context Block Metadata Injection**:
+   The prompt builder explicitly decorates each grounding block:
+   ```
+   [{i}] ({filename}, p.{page}) - Section: {clean_section_title}
+   {clean_content}
+   ```
+This provides the LLM with the exact topic classification of every table without inflating storage or duplicating chunk bodies.
+
+---
+
+## 7. ADR 7: Invisible PDF Bidirectional Unicode Formatting Sanitization
+
+### The Problem
+PDF files generated from Google Docs, Microsoft 365, and LaTeX frequently embed invisible directional formatting markers:
+- `\u202d`: Left-to-Right Override (LRO)
+- `\u202c`: Pop Directional Formatting (PDF)
+- `\u200b-\u200f`: Zero-width spaces, joiners, and non-joiners
+- `\ufeff`: Byte Order Mark (BOM)
+
+These characters contaminate words (e.g. `|\u202dBasics\u202c|`), breaking exact regex matching, tsvector term extraction, and embedding tokenization.
+
+### The Architecture Solution
+A centralized Unicode cleaning pass is enforced at three boundaries:
+1. Prior to embedding generation in `DocumentIngestionTask`.
+2. Prior to query embedding and full-text querying in `RetrievalEngine`.
+3. Prior to context assembly in `build_context_block`.
+```python
+clean_text = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", text).strip()
+```
