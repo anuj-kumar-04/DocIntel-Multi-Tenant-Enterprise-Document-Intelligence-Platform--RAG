@@ -63,6 +63,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        from fastapi.encoders import jsonable_encoder
         request_id = getattr(request.state, "request_id", None)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -70,7 +71,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "error": {
                     "code": "ValidationError",
                     "message": "Request payload validation failed",
-                    "details": exc.errors(),
+                    "details": jsonable_encoder(exc.errors()),
                     "request_id": request_id,
                 }
             },

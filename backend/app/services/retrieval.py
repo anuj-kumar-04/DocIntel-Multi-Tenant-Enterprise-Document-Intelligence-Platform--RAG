@@ -108,7 +108,12 @@ class CrossEncoderReranker:
         model = self._get_model()
         if model:
             try:
-                pairs = [[query, c["content"]] for c in candidates]
+                pairs = []
+                for c in candidates:
+                    sec = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", c.get("section_title") or "").strip()
+                    content = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", c.get("content") or "").strip()
+                    doc_text = f"{sec}\n{content}" if sec else content
+                    pairs.append([query, doc_text])
                 scores = model.predict(pairs)
                 for c, s in zip(candidates, scores):
                     c["rerank_score"] = float(s)
@@ -117,14 +122,18 @@ class CrossEncoderReranker:
                 logger.warning(f"Cross-encoder scoring error: {e}")
 
         # Fallback lexical and term frequency scoring
-        q_words = set(re.findall(r"\w+", query.lower()))
+        clean_q = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", query).lower()
+        q_words = set(re.findall(r"\w+", clean_q))
         for c in candidates:
-            content_lower = c["content"].lower()
-            overlap = sum(1 for w in q_words if w in content_lower)
+            raw_text = c.get("content", "") + " " + (c.get("section_title") or "")
+            clean_text = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", raw_text).lower()
+            overlap = sum(1 for w in q_words if w in clean_text)
             density = overlap / (len(q_words) + 1e-5)
             # Boost table chunks slightly for structured queries
-            type_boost = 1.2 if c.get("element_type") == "table" else 1.0
-            c["rerank_score"] = density * type_boost
+            type_boost = 1.3 if c.get("element_type") == "table" or "|" in c.get("content", "") else 1.0
+            # Boost if section title matches query terms
+            title_boost = 1.3 if c.get("section_title") and any(w in (c.get("section_title") or "").lower() for w in q_words) else 1.0
+            c["rerank_score"] = density * type_boost * title_boost
 
         return sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
 
@@ -162,9 +171,17 @@ class QueryRewriter:
         variations = [query]
         clean_q = re.sub(r"[?!.,]", "", query).strip()
 
-        # Add synonyms and keyword-focused variants
-        variations.append(f"details and breakdown of {clean_q}")
-        variations.append(f"{clean_q} data summary analysis")
+        # Add targeted keyword and semantic variants
+        if any(w in clean_q.lower() for w in ["difference", "compare", "vs", "versus"]):
+            subjects = [w.strip() for w in re.split(r"\b(?:between|and|vs|versus|difference)\b", clean_q, flags=re.IGNORECASE) if len(w.strip()) > 1]
+            if len(subjects) >= 2:
+                variations.append(f"{subjects[0]} {subjects[1]}")
+                variations.append(f"{subjects[0]} vs {subjects[1]}")
+            else:
+                variations.append(clean_q.replace("Difference Between", "").strip())
+        else:
+            variations.append(f"overview {clean_q}")
+            variations.append(f"details of {clean_q}")
         return variations[:3]
 
 
@@ -219,20 +236,21 @@ class RetrievalEngine:
         self, query_text: str, org_id: uuid.UUID, limit: int = 20
     ) -> list[dict[str, Any]]:
         """Sparse BM25 search using PostgreSQL ts_rank_cd, strictly tenant-isolated."""
-        clean_text = re.sub(r"[^\w\s]", " ", query_text).strip()
+        clean_text = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", query_text)
+        clean_text = re.sub(r"[^\w\s]", " ", clean_text).strip()
         if not clean_text:
             return []
 
-        # Try websearch_to_tsquery for natural query phrasing
+        # Combined tsvector search across content and section_title using plainto_tsquery
         query = text(
             """
             SELECT CAST(c.id AS text), c.content, c.page_number, CAST(c.document_id AS text),
                    c.section_title, c.element_type, d.filename,
-                   ts_rank_cd(c.content_tsv, websearch_to_tsquery('english', :q)) AS score
+                   ts_rank_cd((to_tsvector('english', COALESCE(c.section_title, '')) || c.content_tsv), plainto_tsquery('english', :q)) AS score
             FROM chunks c
             JOIN documents d ON c.document_id = d.id
             WHERE c.org_id = :org_id
-              AND c.content_tsv @@ websearch_to_tsquery('english', :q)
+              AND (to_tsvector('english', COALESCE(c.section_title, '')) || c.content_tsv) @@ plainto_tsquery('english', :q)
             ORDER BY score DESC
             LIMIT :limit;
             """
@@ -259,7 +277,9 @@ class RetrievalEngine:
             logger.warning(f"Full-text search fallback triggered: {e}")
             await self.db.rollback()
 
-        # Fallback ILIKE search if TSVECTOR search yielded no match or errored
+        # Fallback ILIKE search on both content and section_title
+        words = [w for w in clean_text.split() if len(w) >= 3 and w.lower() not in {"and", "the", "for", "with", "between", "what", "from"}]
+        kw_pattern = f"%{words[0]}%" if words else f"%{clean_text[:50]}%"
         fallback_query = text(
             """
             SELECT CAST(c.id AS text), c.content, c.page_number, CAST(c.document_id AS text),
@@ -267,14 +287,14 @@ class RetrievalEngine:
             FROM chunks c
             JOIN documents d ON c.document_id = d.id
             WHERE c.org_id = :org_id
-              AND c.content ILIKE :q_pattern
+              AND (c.content ILIKE :q_pattern OR c.section_title ILIKE :q_pattern)
             LIMIT :limit;
             """
         )
         try:
             result = await self.db.execute(
                 fallback_query,
-                {"org_id": org_id, "q_pattern": f"%{clean_text[:50]}%", "limit": limit},
+                {"org_id": org_id, "q_pattern": kw_pattern, "limit": limit},
             )
             rows = result.fetchall()
             return [

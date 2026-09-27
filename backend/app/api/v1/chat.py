@@ -43,8 +43,16 @@ async def create_conversation(
     db.add(conv)
     await db.commit()
     await db.refresh(conv)
-    conv.messages = []
-    return conv
+
+    return ConversationResponse(
+        id=conv.id,
+        org_id=conv.org_id,
+        user_id=conv.user_id,
+        title=conv.title,
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+        messages=[],
+    )
 
 
 @router.get("/conversations", response_model=list[ConversationResponse])
@@ -63,7 +71,21 @@ async def list_conversations(
         .order_by(Conversation.updated_at.desc())
     )
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    convs = result.scalars().all()
+    return [
+        ConversationResponse(
+            id=c.id,
+            org_id=c.org_id,
+            user_id=c.user_id,
+            title=c.title,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+            messages=[
+                MessageResponse.model_validate(m) for m in (c.messages or [])
+            ],
+        )
+        for c in convs
+    ]
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
@@ -85,7 +107,17 @@ async def get_conversation(
     conv = result.scalars().first()
     if not conv:
         raise ResourceNotFoundError("Conversation", str(conversation_id))
-    return conv
+    return ConversationResponse(
+        id=conv.id,
+        org_id=conv.org_id,
+        user_id=conv.user_id,
+        title=conv.title,
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+        messages=[
+            MessageResponse.model_validate(m) for m in (conv.messages or [])
+        ],
+    )
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)

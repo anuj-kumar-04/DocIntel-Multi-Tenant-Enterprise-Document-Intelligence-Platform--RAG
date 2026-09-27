@@ -13,16 +13,26 @@ _model_instance: Any = None
 
 
 def get_embedding_model():
-    """Lazy load sentence-transformers model instance."""
+    """Lazy load fastembed or sentence-transformers model instance."""
     global _model_instance
     if _model_instance is None:
         try:
+            from fastembed import TextEmbedding
+            logger.info(f"Loading fastembed embedding model: {settings.EMBEDDING_MODEL_NAME}")
+            _model_instance = ("fastembed", TextEmbedding(model_name=settings.EMBEDDING_MODEL_NAME, cache_dir="/tmp/huggingface"))
+            return _model_instance
+        except Exception as e:
+            logger.warning(f"Could not load fastembed ({e}). Trying SentenceTransformer...")
+
+        try:
             from sentence_transformers import SentenceTransformer
             logger.info(f"Loading embedding model: {settings.EMBEDDING_MODEL_NAME}")
-            _model_instance = SentenceTransformer(settings.EMBEDDING_MODEL_NAME)
+            _model_instance = ("sentence_transformers", SentenceTransformer(settings.EMBEDDING_MODEL_NAME))
+            return _model_instance
         except Exception as e:
             logger.warning(f"Could not load SentenceTransformer ({e}). Using deterministic embedding fallback.")
-            _model_instance = "fallback"
+            _model_instance = ("fallback", None)
+
     return _model_instance
 
 
@@ -54,8 +64,14 @@ class EmbeddingService:
 
     def embed_query(self, query: str) -> list[float]:
         """Embed a single query string."""
-        model = get_embedding_model()
-        if model != "fallback":
+        backend, model = get_embedding_model()
+        if backend == "fastembed":
+            try:
+                emb = list(model.embed([query]))[0]
+                return emb.tolist() if hasattr(emb, "tolist") else list(emb)
+            except Exception as e:
+                logger.warning(f"Fastembed inference failed: {e}. Falling back.")
+        elif backend == "sentence_transformers":
             try:
                 embedding = model.encode(query, normalize_embeddings=True)
                 return embedding.tolist()
@@ -68,10 +84,15 @@ class EmbeddingService:
         if not texts:
             return []
 
-        model = get_embedding_model()
-        embeddings: list[list[float]] = []
-
-        if model != "fallback":
+        backend, model = get_embedding_model()
+        if backend == "fastembed":
+            try:
+                embs = list(model.embed(texts))
+                return [e.tolist() if hasattr(e, "tolist") else list(e) for e in embs]
+            except Exception as e:
+                logger.warning(f"Fastembed batch embedding failed: {e}. Falling back.")
+        elif backend == "sentence_transformers":
+            embeddings: list[list[float]] = []
             try:
                 for i in range(0, len(texts), self.batch_size):
                     batch = texts[i : i + self.batch_size]
@@ -82,9 +103,7 @@ class EmbeddingService:
                 logger.warning(f"Batch embedding model inference failed: {e}. Falling back.")
 
         # Fallback path
-        for t in texts:
-            embeddings.append(self._fallback_embed(t))
-        return embeddings
+        return [self._fallback_embed(t) for t in texts]
 
 
 embedding_service = EmbeddingService(

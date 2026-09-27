@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
-    DEFAULT_LLM_MODEL: str = "groq/llama-3.3-70b-versatile"
-    FALLBACK_LLM_MODEL: str = "gemini/gemini-2.0-flash"
+    DEFAULT_LLM_MODEL: str = "groq/qwen/qwen3.8-27b"
+    FALLBACK_LLM_MODEL: str = "gemini/gemini-3.5-flash-lite"
 
     # Embedding & Re-ranking
     EMBEDDING_MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
