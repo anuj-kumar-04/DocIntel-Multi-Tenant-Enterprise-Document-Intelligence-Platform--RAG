@@ -3,11 +3,10 @@ import os
 from typing import BinaryIO
 
 import boto3
-from botocore.client import Config
-from botocore.exceptions import ClientError
-
 from app.config import settings
 from app.core.logging import logger
+from botocore.client import Config
+from botocore.exceptions import ClientError
 
 
 class StorageService:
@@ -56,11 +55,17 @@ class StorageService:
 
     def upload_file(self, file_obj: BinaryIO, s3_key: str, content_type: str) -> str:
         """Upload a file-like object to S3/SeaweedFS with local fallback."""
+        try:
+            file_obj.seek(0)
+            raw_bytes = file_obj.read()
+        except (ValueError, AttributeError):
+            raw_bytes = b""
+
         if self._client:
             try:
-                file_obj.seek(0)
+                buf = io.BytesIO(raw_bytes)
                 self._client.upload_fileobj(
-                    file_obj,
+                    buf,
                     self.bucket_name,
                     s3_key,
                     ExtraArgs={"ContentType": content_type},
@@ -72,9 +77,8 @@ class StorageService:
         # Local fallback
         local_path = os.path.join(self.local_storage_dir, s3_key)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        file_obj.seek(0)
         with open(local_path, "wb") as f:
-            f.write(file_obj.read())
+            f.write(raw_bytes)
         return s3_key
 
     def download_file(self, s3_key: str) -> bytes:

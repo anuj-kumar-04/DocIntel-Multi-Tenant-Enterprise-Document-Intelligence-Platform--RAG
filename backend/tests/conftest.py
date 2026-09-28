@@ -15,14 +15,13 @@ test_db_url = os.environ.get(
 )
 os.environ["DATABASE_URL"] = test_db_url
 
-from sqlalchemy.pool import NullPool
-
 from app.core.security import create_access_token, get_password_hash
 from app.deps import get_db
 from app.main import app
 from app.models.base import Base
 from app.models.org import Organization
 from app.models.user import User, UserRole
+from sqlalchemy.pool import NullPool
 
 # Engine setup with NullPool to prevent event loop mismatch across async tests
 test_engine = create_async_engine(test_db_url, echo=False, poolclass=NullPool)
@@ -82,11 +81,14 @@ class SeededTenant:
 @pytest_asyncio.fixture(scope="function")
 async def seed_two_tenants(db_session: AsyncSession) -> tuple[SeededTenant, SeededTenant]:
     """Seed two completely distinct tenant organizations for strict isolation testing."""
+    u_a = uuid.uuid4().hex[:8]
+    u_b = uuid.uuid4().hex[:8]
+
     # Org A: Acme Corp
     org_a = Organization(
         id=uuid.uuid4(),
-        name="Acme Corp",
-        slug="acme-corp",
+        name=f"Acme Corp {u_a}",
+        slug=f"acme-corp-{u_a}",
         monthly_token_budget=1_000_000,
         tokens_used_this_month=0,
     )
@@ -96,7 +98,7 @@ async def seed_two_tenants(db_session: AsyncSession) -> tuple[SeededTenant, Seed
     user_a_owner = User(
         id=uuid.uuid4(),
         org_id=org_a.id,
-        email="owner@acme.com",
+        email=f"owner-{u_a}@acme.com",
         full_name="Acme Owner",
         hashed_password=get_password_hash("SecretPass123!"),
         role=UserRole.OWNER,
@@ -105,7 +107,7 @@ async def seed_two_tenants(db_session: AsyncSession) -> tuple[SeededTenant, Seed
     user_a_member = User(
         id=uuid.uuid4(),
         org_id=org_a.id,
-        email="member@acme.com",
+        email=f"member-{u_a}@acme.com",
         full_name="Acme Member",
         hashed_password=get_password_hash("SecretPass123!"),
         role=UserRole.MEMBER,
@@ -116,8 +118,8 @@ async def seed_two_tenants(db_session: AsyncSession) -> tuple[SeededTenant, Seed
     # Org B: Zephyr Industries
     org_b = Organization(
         id=uuid.uuid4(),
-        name="Zephyr Industries",
-        slug="zephyr-corp",
+        name=f"Zephyr Industries {u_b}",
+        slug=f"zephyr-corp-{u_b}",
         monthly_token_budget=500_000,
         tokens_used_this_month=0,
     )
@@ -127,7 +129,7 @@ async def seed_two_tenants(db_session: AsyncSession) -> tuple[SeededTenant, Seed
     user_b_owner = User(
         id=uuid.uuid4(),
         org_id=org_b.id,
-        email="owner@zephyr.com",
+        email=f"owner-{u_b}@zephyr.com",
         full_name="Zephyr Owner",
         hashed_password=get_password_hash("SecretPass123!"),
         role=UserRole.OWNER,
@@ -136,7 +138,7 @@ async def seed_two_tenants(db_session: AsyncSession) -> tuple[SeededTenant, Seed
     user_b_member = User(
         id=uuid.uuid4(),
         org_id=org_b.id,
-        email="member@zephyr.com",
+        email=f"member-{u_b}@zephyr.com",
         full_name="Zephyr Member",
         hashed_password=get_password_hash("SecretPass123!"),
         role=UserRole.MEMBER,

@@ -1,9 +1,8 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
-
 from app.models.user import UserRole
+from pydantic import BaseModel, Field
 
 
 class TenantUsageResponse(BaseModel):

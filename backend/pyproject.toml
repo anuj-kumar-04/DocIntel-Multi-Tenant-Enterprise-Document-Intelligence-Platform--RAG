@@ -36,7 +36,6 @@ pythonpath = [
 ]
 testpaths = [
     "tests",
-    "backend/tests",
 ]
 python_files = [
     "test_*.py",

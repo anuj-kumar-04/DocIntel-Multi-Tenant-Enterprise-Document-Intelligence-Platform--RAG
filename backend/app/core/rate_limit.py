@@ -1,8 +1,7 @@
+from app.config import settings
 from fastapi import Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-
-from app.config import settings
 
 
 def get_tenant_or_ip_key(request: Request) -> str:

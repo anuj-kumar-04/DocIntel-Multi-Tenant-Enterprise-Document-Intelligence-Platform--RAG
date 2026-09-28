@@ -1,11 +1,10 @@
 import uuid
 from typing import TYPE_CHECKING
 
+from app.models.base import Base, TimestampMixin
 from sqlalchemy import BigInteger, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.chat import Conversation

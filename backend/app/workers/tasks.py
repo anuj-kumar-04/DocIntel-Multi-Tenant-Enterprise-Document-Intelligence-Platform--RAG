@@ -2,9 +2,6 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 
-from celery import shared_task
-from sqlalchemy import select
-
 from app.core.logging import logger
 from app.deps import AsyncSessionLocal
 from app.models.chunk import Chunk
@@ -13,6 +10,8 @@ from app.services.chunking import LayoutChunker
 from app.services.embeddings import embedding_service
 from app.services.parsing import DocumentParser
 from app.services.storage import storage_service
+from celery import shared_task
+from sqlalchemy import select
 
 
 async def process_document_pipeline(document_id: str | uuid.UUID) -> dict:

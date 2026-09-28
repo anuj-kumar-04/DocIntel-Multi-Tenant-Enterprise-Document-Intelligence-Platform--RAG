@@ -1,8 +1,7 @@
 import pytest
+from app.models.org import Organization
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.org import Organization
 
 
 @pytest.mark.asyncio

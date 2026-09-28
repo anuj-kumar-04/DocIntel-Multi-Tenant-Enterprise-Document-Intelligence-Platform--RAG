@@ -3,12 +3,11 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from app.models.base import Base, TimestampMixin
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.chunk import Chunk

@@ -1,10 +1,9 @@
 import asyncio
 import re
 
-from sqlalchemy import text
-
 from app.deps import AsyncSessionLocal
 from app.services.embeddings import embedding_service
+from sqlalchemy import text
 
 
 async def reindex_all_chunks():

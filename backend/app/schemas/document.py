@@ -1,9 +1,8 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
-
 from app.models.document import DocumentStatus
+from pydantic import BaseModel, ConfigDict
 
 
 class DocumentUploadResponse(BaseModel):

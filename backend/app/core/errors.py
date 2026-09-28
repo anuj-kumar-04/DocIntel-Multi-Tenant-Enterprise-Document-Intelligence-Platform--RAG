@@ -1,10 +1,9 @@
 from typing import Any
 
+from app.core.logging import logger
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-
-from app.core.logging import logger
 
 
 class DocIntelException(Exception):

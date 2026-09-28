@@ -1,13 +1,12 @@
 import uuid
 from collections.abc import AsyncGenerator
 
+from app.config import settings
+from app.models.user import User, UserRole
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.config import settings
-from app.models.user import User, UserRole
 
 # Async SQLAlchemy Engine & Session Factory
 engine_kwargs: dict = {

@@ -1,13 +1,6 @@
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from prometheus_fastapi_instrumentator import Instrumentator
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-
 from app.api.v1.router import api_v1_router
 from app.config import settings
 from app.core.errors import register_exception_handlers
@@ -15,6 +8,12 @@ from app.core.logging import RequestContextMiddleware, logger
 from app.core.rate_limit import limiter
 from app.deps import engine
 from app.models.base import Base
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from prometheus_fastapi_instrumentator import Instrumentator
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 
 @asynccontextmanager

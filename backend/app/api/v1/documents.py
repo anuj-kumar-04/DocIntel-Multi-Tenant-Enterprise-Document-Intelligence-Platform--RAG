@@ -2,19 +2,6 @@ import hashlib
 import io
 import uuid
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Depends,
-    File,
-    HTTPException,
-    UploadFile,
-    status,
-)
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-
 from app.config import settings
 from app.core.errors import ResourceNotFoundError
 from app.core.logging import logger
@@ -29,6 +16,18 @@ from app.schemas.document import (
 )
 from app.services.storage import storage_service
 from app.workers.tasks import ingest_document, process_document_pipeline
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    UploadFile,
+    status,
+)
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 

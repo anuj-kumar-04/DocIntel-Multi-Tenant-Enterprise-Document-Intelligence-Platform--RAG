@@ -2,10 +2,6 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-
 from app.config import settings
 from app.core.errors import AuthenticationFailedError, DocIntelException
 from app.core.security import (
@@ -23,6 +19,9 @@ from app.schemas.auth import (
     UserLoginRequest,
     UserRegisterRequest,
 )
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 
 def slugify(text: str) -> str:

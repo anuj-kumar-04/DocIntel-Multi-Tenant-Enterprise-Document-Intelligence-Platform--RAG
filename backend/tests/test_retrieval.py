@@ -1,5 +1,4 @@
 import pytest
-
 from app.services.cache import SemanticCache
 from app.services.retrieval import (
     QueryRewriter,

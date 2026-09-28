@@ -4,7 +4,6 @@ from typing import Any
 import docx
 import fitz  # PyMuPDF
 import openpyxl
-
 from app.core.logging import logger
 
 

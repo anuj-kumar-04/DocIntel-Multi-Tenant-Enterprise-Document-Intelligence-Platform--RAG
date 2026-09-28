@@ -76,15 +76,16 @@ jobs:
           pip install pytest pytest-asyncio pytest-cov httpx
 
       - name: Run Test Suite
+        working-directory: backend
         env:
           ENVIRONMENT: test
           SECRET_KEY: test-key-32-chars-long-minimum-jwt
           DATABASE_URL: postgresql+asyncpg://docintel_admin:docintel_secure_pass@localhost:5432/docintel_test
           DATABASE_URL_SYNC: postgresql+psycopg2://docintel_admin:docintel_secure_pass@localhost:5432/docintel_test
           REDIS_URL: redis://localhost:6379/0
-          PYTHONPATH: backend
+          PYTHONPATH: .
         run: |
-          pytest backend/tests/ -v --cov=backend/app --cov-report=xml
+          pytest tests/ -v --cov=app --cov-report=xml
 
   eval-regression-gate:
     name: RAGAS Retrieval Quality Regression Gate

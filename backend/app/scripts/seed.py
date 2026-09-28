@@ -7,8 +7,6 @@ from datetime import UTC, datetime
 # Add backend directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from sqlalchemy import select
-
 from app.core.security import get_password_hash
 from app.deps import AsyncSessionLocal
 from app.models.chunk import Chunk
@@ -16,6 +14,7 @@ from app.models.document import Document, DocumentStatus
 from app.models.org import Organization
 from app.models.user import User, UserRole
 from app.services.embeddings import embedding_service
+from sqlalchemy import select
 
 
 async def seed_database():

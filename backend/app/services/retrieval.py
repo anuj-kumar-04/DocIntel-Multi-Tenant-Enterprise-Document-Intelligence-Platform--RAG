@@ -2,13 +2,12 @@ import re
 import uuid
 from typing import Any
 
-from pydantic import BaseModel
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.config import settings
 from app.core.logging import logger
 from app.services.embeddings import embedding_service
+from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def reciprocal_rank_fusion(

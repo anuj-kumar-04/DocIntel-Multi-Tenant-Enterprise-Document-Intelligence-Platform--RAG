@@ -3,7 +3,6 @@ from typing import Any
 
 import numpy as np
 import redis.asyncio as aioredis
-
 from app.config import settings
 from app.core.logging import logger
 from app.services.embeddings import embedding_service

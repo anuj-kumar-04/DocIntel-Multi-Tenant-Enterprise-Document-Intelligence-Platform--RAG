@@ -3,12 +3,6 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, status
-from fastapi.responses import StreamingResponse
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-
 from app.core.errors import ResourceNotFoundError
 from app.core.logging import logger
 from app.core.tracing import TraceContext
@@ -25,6 +19,11 @@ from app.services.budget import BudgetService
 from app.services.cache import semantic_cache
 from app.services.generation import generation_service
 from app.services.retrieval import RetrievalConfig, RetrievalEngine
+from fastapi import APIRouter, Depends, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/chat", tags=["Chat & RAG"])
 

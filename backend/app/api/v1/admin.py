@@ -1,7 +1,3 @@
-from fastapi import APIRouter, Depends, status
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.deps import get_db, require_role
 from app.models.chat import Conversation, Message
 from app.models.chunk import Chunk
@@ -12,6 +8,9 @@ from app.models.user import User, UserRole
 from app.schemas.admin import MemberResponse, TenantUsageResponse, UpdateBudgetRequest
 from app.schemas.auth import MemberInviteRequest
 from app.services.auth_service import AuthService
+from fastapi import APIRouter, Depends, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/admin", tags=["Admin & Tenant Governance"])
 

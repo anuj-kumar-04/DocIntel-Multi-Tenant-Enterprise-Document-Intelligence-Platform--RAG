@@ -1,12 +1,11 @@
 import uuid
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.chunk import Chunk
 from app.models.document import Document, DocumentStatus
 from app.services.embeddings import embedding_service
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.asyncio
