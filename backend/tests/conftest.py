@@ -9,10 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 # Set test environment
 os.environ["ENVIRONMENT"] = "test"
-test_db_url = os.environ.get(
+raw_db_url = os.environ.get(
     "DATABASE_URL",
     "postgresql+asyncpg://docintel_admin:docintel_secure_pass@localhost:5432/docintel_test",
 )
+# Guarantee tests never drop or alter the live development database
+test_db_url = raw_db_url + "_test" if raw_db_url.endswith("/docintel") else raw_db_url
 os.environ["DATABASE_URL"] = test_db_url
 
 from app.core.security import create_access_token, get_password_hash
