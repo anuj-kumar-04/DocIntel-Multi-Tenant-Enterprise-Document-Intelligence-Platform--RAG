@@ -26,10 +26,10 @@ jobs:
           pip install ruff mypy
 
       - name: Run Ruff Linter
-        run: ruff check backend/app backend/tests
+        run: ruff check backend/app backend/tests --config backend/pyproject.toml
 
       - name: Run Ruff Formatter Check
-        run: ruff format --check backend/app backend/tests
+        run: ruff format --check backend/app backend/tests --config backend/pyproject.toml
 
   test-suite:
     name: Pytest Suite & Coverage
@@ -82,6 +82,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://docintel_admin:docintel_secure_pass@localhost:5432/docintel_test
           DATABASE_URL_SYNC: postgresql+psycopg2://docintel_admin:docintel_secure_pass@localhost:5432/docintel_test
           REDIS_URL: redis://localhost:6379/0
+          PYTHONPATH: backend
         run: |
           pytest backend/tests/ -v --cov=backend/app --cov-report=xml
 
@@ -99,10 +100,12 @@ jobs:
           python-version: "3.12"
 
       - name: Run Retrieval Quality Regression Gate
+        env:
+          PYTHONPATH: backend
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
-          python eval/run_eval.py --ci-gate --min-faithfulness 0.85
+          python eval/run_eval.py --version v3 --ci-gate --min-faithfulness 0.85
 
   docker-build:
     name: Docker Container Build Check

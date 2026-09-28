@@ -1,14 +1,13 @@
-import asyncio
 import re
-from typing import Any
 import uuid
+from typing import Any
+
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.logging import logger
-from app.models.chunk import Chunk
 from app.services.embeddings import embedding_service
 
 
@@ -16,7 +15,7 @@ def reciprocal_rank_fusion(
     ranked_lists: list[list[str]], k: int = 60, top_n: int = 30
 ) -> list[str]:
     """Reciprocal Rank Fusion (RRF) algorithm to fuse diverse ranked ID lists.
-    
+
     Formula: score(d) = sum(1 / (k + rank(d)))
     Independent of score distributions and scales.
     """
@@ -92,6 +91,7 @@ class CrossEncoderReranker:
         if not self._initialized:
             try:
                 from sentence_transformers import CrossEncoder
+
                 self._model = CrossEncoder(settings.RERANKER_MODEL_NAME)
                 logger.info(f"Loaded CrossEncoder: {settings.RERANKER_MODEL_NAME}")
             except Exception as e:
@@ -100,7 +100,9 @@ class CrossEncoderReranker:
             self._initialized = True
         return self._model
 
-    def rank(self, query: str, candidates: list[dict[str, Any]], top_k: int = 6) -> list[dict[str, Any]]:
+    def rank(
+        self, query: str, candidates: list[dict[str, Any]], top_k: int = 6
+    ) -> list[dict[str, Any]]:
         """Re-rank candidate chunks against the standalone query."""
         if not candidates:
             return []
@@ -110,12 +112,16 @@ class CrossEncoderReranker:
             try:
                 pairs = []
                 for c in candidates:
-                    sec = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", c.get("section_title") or "").strip()
-                    content = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", c.get("content") or "").strip()
+                    sec = re.sub(
+                        r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", c.get("section_title") or ""
+                    ).strip()
+                    content = re.sub(
+                        r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", c.get("content") or ""
+                    ).strip()
                     doc_text = f"{sec}\n{content}" if sec else content
                     pairs.append([query, doc_text])
                 scores = model.predict(pairs)
-                for c, s in zip(candidates, scores):
+                for c, s in zip(candidates, scores, strict=False):
                     c["rerank_score"] = float(s)
                 return sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
             except Exception as e:
@@ -130,9 +136,16 @@ class CrossEncoderReranker:
             overlap = sum(1 for w in q_words if w in clean_text)
             density = overlap / (len(q_words) + 1e-5)
             # Boost table chunks slightly for structured queries
-            type_boost = 1.3 if c.get("element_type") == "table" or "|" in c.get("content", "") else 1.0
+            type_boost = (
+                1.3 if c.get("element_type") == "table" or "|" in c.get("content", "") else 1.0
+            )
             # Boost if section title matches query terms
-            title_boost = 1.3 if c.get("section_title") and any(w in (c.get("section_title") or "").lower() for w in q_words) else 1.0
+            title_boost = (
+                1.3
+                if c.get("section_title")
+                and any(w in (c.get("section_title") or "").lower() for w in q_words)
+                else 1.0
+            )
             c["rerank_score"] = density * type_boost * title_boost
 
         return sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
@@ -173,7 +186,13 @@ class QueryRewriter:
 
         # Add targeted keyword and semantic variants
         if any(w in clean_q.lower() for w in ["difference", "compare", "vs", "versus"]):
-            subjects = [w.strip() for w in re.split(r"\b(?:between|and|vs|versus|difference)\b", clean_q, flags=re.IGNORECASE) if len(w.strip()) > 1]
+            subjects = [
+                w.strip()
+                for w in re.split(
+                    r"\b(?:between|and|vs|versus|difference)\b", clean_q, flags=re.IGNORECASE
+                )
+                if len(w.strip()) > 1
+            ]
             if len(subjects) >= 2:
                 variations.append(f"{subjects[0]} {subjects[1]}")
                 variations.append(f"{subjects[0]} vs {subjects[1]}")
@@ -211,7 +230,9 @@ class RetrievalEngine:
             """
         )
         try:
-            result = await self.db.execute(query, {"qvec": vec_str, "org_id": org_id, "limit": limit})
+            result = await self.db.execute(
+                query, {"qvec": vec_str, "org_id": org_id, "limit": limit}
+            )
             rows = result.fetchall()
             return [
                 {
@@ -256,7 +277,9 @@ class RetrievalEngine:
             """
         )
         try:
-            result = await self.db.execute(query, {"q": clean_text, "org_id": org_id, "limit": limit})
+            result = await self.db.execute(
+                query, {"q": clean_text, "org_id": org_id, "limit": limit}
+            )
             rows = result.fetchall()
             if rows:
                 return [
@@ -278,7 +301,12 @@ class RetrievalEngine:
             await self.db.rollback()
 
         # Fallback ILIKE search on both content and section_title
-        words = [w for w in clean_text.split() if len(w) >= 3 and w.lower() not in {"and", "the", "for", "with", "between", "what", "from"}]
+        words = [
+            w
+            for w in clean_text.split()
+            if len(w) >= 3
+            and w.lower() not in {"and", "the", "for", "with", "between", "what", "from"}
+        ]
         kw_pattern = f"%{words[0]}%" if words else f"%{clean_text[:50]}%"
         fallback_query = text(
             """
@@ -365,9 +393,7 @@ class RetrievalEngine:
 
         # Step 1: Query rewriting
         standalone = (
-            self.rewriter.to_standalone(question, history or [])
-            if cfg.rewrite
-            else question
+            self.rewriter.to_standalone(question, history or []) if cfg.rewrite else question
         )
 
         # Step 2: Multi-query expansion

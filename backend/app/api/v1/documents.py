@@ -1,6 +1,7 @@
 import hashlib
 import io
 import uuid
+
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -57,7 +58,7 @@ async def upload_document(
     if file_size > settings.MAX_FILE_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds maximum allowed size of {settings.MAX_FILE_SIZE_BYTES // (1024*1024)} MB",
+            detail=f"File exceeds maximum allowed size of {settings.MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB",
         )
     if file_size == 0:
         raise HTTPException(
@@ -116,7 +117,9 @@ async def upload_document(
         ingest_document.delay(str(document.id))
         enqueued_celery = True
     except Exception as e:
-        logger.warning(f"Celery enqueue skipped or unavailable ({e}); running via FastAPI background task.")
+        logger.warning(
+            f"Celery enqueue skipped or unavailable ({e}); running via FastAPI background task."
+        )
 
     if not enqueued_celery:
         background_tasks.add_task(process_document_pipeline, str(document.id))

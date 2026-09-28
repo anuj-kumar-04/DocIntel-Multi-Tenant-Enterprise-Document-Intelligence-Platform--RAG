@@ -1,7 +1,8 @@
-from datetime import datetime
 import enum
-from typing import TYPE_CHECKING
 import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING
+
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -10,12 +11,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
-    from app.models.org import Organization
-    from app.models.document import Document
     from app.models.chat import Conversation
+    from app.models.document import Document
+    from app.models.org import Organization
 
 
-class UserRole(str, enum.Enum):
+class UserRole(enum.StrEnum):
     OWNER = "owner"
     ADMIN = "admin"
     MEMBER = "member"
@@ -49,8 +50,8 @@ class User(Base, TimestampMixin):
     # Relationships
     organization: Mapped["Organization"] = relationship("Organization", back_populates="users")
     documents: Mapped[list["Document"]] = relationship("Document", back_populates="uploader")
-    conversations: Mapped[list["Conversation"]] = relationship("Conversation", back_populates="user")
-
-    __table_args__ = (
-        Index("ix_users_org_role", "org_id", "role"),
+    conversations: Mapped[list["Conversation"]] = relationship(
+        "Conversation", back_populates="user"
     )
+
+    __table_args__ = (Index("ix_users_org_role", "org_id", "role"),)

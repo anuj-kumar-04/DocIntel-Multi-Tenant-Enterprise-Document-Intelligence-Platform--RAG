@@ -1,9 +1,11 @@
 import asyncio
 import re
+
 from sqlalchemy import text
+
 from app.deps import AsyncSessionLocal
 from app.services.embeddings import embedding_service
-from app.core.logging import logger
+
 
 async def reindex_all_chunks():
     print("=== Starting Re-indexing with Fastembed (BAAI/bge-small-en-v1.5) ===")
@@ -30,17 +32,20 @@ async def reindex_all_chunks():
             embeddings = embedding_service.embed_documents(cleaned_texts)
 
             # Update DB
-            for chunk_id, emb in zip(ids, embeddings):
+            for chunk_id, emb in zip(ids, embeddings, strict=False):
                 vec_str = "[" + ",".join(f"{x:.6f}" for x in emb) + "]"
                 await db.execute(
-                    text("UPDATE chunks SET embedding = CAST(:vec AS vector) WHERE id = CAST(:id AS uuid)"),
-                    {"vec": vec_str, "id": chunk_id}
+                    text(
+                        "UPDATE chunks SET embedding = CAST(:vec AS vector) WHERE id = CAST(:id AS uuid)"
+                    ),
+                    {"vec": vec_str, "id": chunk_id},
                 )
 
             await db.commit()
             print(f"Re-indexed {min(start_idx + batch_size, total)} / {total} chunks...")
 
     print("=== Re-indexing completed successfully! ===")
+
 
 if __name__ == "__main__":
     asyncio.run(reindex_all_chunks())

@@ -1,29 +1,31 @@
-import asyncio
 import os
 import uuid
-from typing import AsyncGenerator
-import pytest
+from collections.abc import AsyncGenerator
+
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Set test environment
 os.environ["ENVIRONMENT"] = "test"
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+test_db_url = os.environ.get(
+    "DATABASE_URL",
+    "postgresql+asyncpg://docintel_admin:docintel_secure_pass@localhost:5432/docintel_test",
+)
+os.environ["DATABASE_URL"] = test_db_url
 
-from app.config import settings
+from sqlalchemy.pool import NullPool
+
 from app.core.security import create_access_token, get_password_hash
 from app.deps import get_db
 from app.main import app
 from app.models.base import Base
-from app.models.chunk import Chunk
-from app.models.document import Document, DocumentStatus
 from app.models.org import Organization
 from app.models.user import User, UserRole
-from app.services.embeddings import embedding_service
 
-# In-memory SQLite async engine for lightning-fast self-contained unit and isolation tests
-test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+# Engine setup with NullPool to prevent event loop mismatch across async tests
+test_engine = create_async_engine(test_db_url, echo=False, poolclass=NullPool)
 TestingSessionLocal = async_sessionmaker(
     bind=test_engine,
     class_=AsyncSession,
@@ -33,17 +35,12 @@ TestingSessionLocal = async_sessionmaker(
 )
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
 @pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a pristine database session with schema for each test."""
     async with test_engine.begin() as conn:
+        if not test_db_url.startswith("sqlite"):
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         await conn.run_sync(Base.metadata.create_all)
 
     async with TestingSessionLocal() as session:
@@ -56,6 +53,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 @pytest_asyncio.fixture(scope="function")
 async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """Create an AsyncClient with database dependency overridden."""
+
     async def override_get_db():
         yield db_session
 
@@ -69,7 +67,9 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
 
 
 class SeededTenant:
-    def __init__(self, org: Organization, owner: User, member: User, token_owner: str, token_member: str):
+    def __init__(
+        self, org: Organization, owner: User, member: User, token_owner: str, token_member: str
+    ):
         self.org = org
         self.owner = owner
         self.member = member

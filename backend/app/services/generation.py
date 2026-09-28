@@ -1,9 +1,8 @@
-from collections.abc import AsyncGenerator
-import json
 import os
 import re
-import time
+from collections.abc import AsyncGenerator
 from typing import Any
+
 try:
     import litellm
 except ImportError:
@@ -40,7 +39,11 @@ def build_context_block(chunks: list[dict[str, Any]]) -> tuple[str, list[dict[st
 
         # Clean invisible directional/formatting characters (e.g. \u202d, \u202c, \ufeff)
         clean_content = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", raw_content).strip()
-        clean_section = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", section_title).strip() if section_title else None
+        clean_section = (
+            re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", section_title).strip()
+            if section_title
+            else None
+        )
 
         header = f"[{i}] ({filename}, p.{page})"
         if clean_section:
@@ -104,10 +107,40 @@ def synthesize_smart_grounded_answer(
     q_lower = q_clean.lower()
 
     stop_words = {
-        "what", "when", "where", "which", "who", "whom", "whose", "why", "how",
-        "the", "and", "for", "with", "this", "that", "from", "are", "is", "was",
-        "were", "tell", "explain", "about", "give", "show", "does", "did", "can",
-        "could", "would", "should", "between", "difference", "differences"
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "why",
+        "how",
+        "the",
+        "and",
+        "for",
+        "with",
+        "this",
+        "that",
+        "from",
+        "are",
+        "is",
+        "was",
+        "were",
+        "tell",
+        "explain",
+        "about",
+        "give",
+        "show",
+        "does",
+        "did",
+        "can",
+        "could",
+        "would",
+        "should",
+        "between",
+        "difference",
+        "differences",
     }
     q_words = [w for w in re.findall(r"\w+", q_lower) if len(w) > 2 and w not in stop_words]
 
@@ -124,14 +157,16 @@ def synthesize_smart_grounded_answer(
         if overlap > 0:
             has_any_match = True
 
-        cleaned_chunks.append({
-            "index": i,
-            "filename": chunk.get("filename", "document"),
-            "page": chunk.get("page_number", 1),
-            "content": clean_c,
-            "overlap": overlap,
-            "raw": chunk,
-        })
+        cleaned_chunks.append(
+            {
+                "index": i,
+                "filename": chunk.get("filename", "document"),
+                "page": chunk.get("page_number", 1),
+                "content": clean_c,
+                "overlap": overlap,
+                "raw": chunk,
+            }
+        )
 
     # Strict Refusal Gate: If question keywords have NO match in retrieved context
     if q_words and not has_any_match:
@@ -141,20 +176,26 @@ def synthesize_smart_grounded_answer(
     cleaned_chunks.sort(key=lambda x: x["overlap"], reverse=True)
 
     # 1. Check for "Difference" or comparison intent
-    is_diff = any(w in q_lower for w in ["difference", "differences", "vs", "versus", "compare", "comparison"])
+    is_diff = any(
+        w in q_lower for w in ["difference", "differences", "vs", "versus", "compare", "comparison"]
+    )
     if is_diff:
         for c in cleaned_chunks:
             idx = c["index"]
-            lines = [l.strip() for l in c["content"].split("\n") if l.strip()]
-            table_lines = [l for l in lines if l.startswith("|")]
+            lines = [ln.strip() for ln in c["content"].split("\n") if ln.strip()]
+            table_lines = [ln for ln in lines if ln.startswith("|")]
             if len(table_lines) >= 3:
                 clean_table = [re.sub(r"\s{2,}", " ", r).strip() for r in table_lines]
-                return f"Based on the documents, here is the comparison:\n\n" + "\n".join(clean_table) + f"\n\n[{idx}]"
+                return (
+                    "Based on the documents, here is the comparison:\n\n"
+                    + "\n".join(clean_table)
+                    + f"\n\n[{idx}]"
+                )
 
         diff_points = []
         for c in cleaned_chunks:
             idx = c["index"]
-            lines = [l.strip() for l in c["content"].split("\n") if l.strip()]
+            lines = [ln.strip() for ln in c["content"].split("\n") if ln.strip()]
             current_topic = None
             current_details = []
             for line in lines:
@@ -172,10 +213,26 @@ def synthesize_smart_grounded_answer(
                 diff_points.append(f"• **{current_topic}**: {detail_text} [{idx}]")
 
         if diff_points:
-            return "Based on the documents, here is the comparison:\n\n" + "\n\n".join(diff_points[:6])
+            return "Based on the documents, here is the comparison:\n\n" + "\n\n".join(
+                diff_points[:6]
+            )
 
     # 2. Check for definition / "what is" intent
-    is_def = any(w in q_lower for w in ["what is", "define", "meaning of", "definition of", "what are", "overview", "explain"]) or len(q_words) <= 2
+    is_def = (
+        any(
+            w in q_lower
+            for w in [
+                "what is",
+                "define",
+                "meaning of",
+                "definition of",
+                "what are",
+                "overview",
+                "explain",
+            ]
+        )
+        or len(q_words) <= 2
+    )
     if is_def:
         def_sections = []
         for c in cleaned_chunks:
@@ -200,29 +257,60 @@ def synthesize_smart_grounded_answer(
             return "Based on the documents:\n\n" + "\n\n".join(def_sections)
 
     # 3. Financial / Metric intent (e.g. profit, revenue, numbers)
-    has_metrics = any(w in q_lower for w in ["profit", "revenue", "income", "currency", "sales", "ebit", "loss", "cost", "margin", "2024", "2023", "2022", "balance", "total", "cash"])
+    has_metrics = any(
+        w in q_lower
+        for w in [
+            "profit",
+            "revenue",
+            "income",
+            "currency",
+            "sales",
+            "ebit",
+            "loss",
+            "cost",
+            "margin",
+            "2024",
+            "2023",
+            "2022",
+            "balance",
+            "total",
+            "cash",
+        ]
+    )
     if has_metrics:
         metric_results = []
         for c in cleaned_chunks:
             idx = c["index"]
-            raw_lines = [l.strip() for l in c["content"].split("\n") if l.strip()]
+            raw_lines = [ln.strip() for ln in c["content"].split("\n") if ln.strip()]
 
             # Determine unit of measurement if present (e.g. In millions of CHF)
             unit_str = ""
-            for l in raw_lines:
-                if any(k in l.lower() for k in ["millions of", "thousands of", "billions of", "in chf", "in usd", "in eur"]):
-                    unit_str = re.sub(r"^[#\s\-*]+", "", l).strip()
+            for raw_l in raw_lines:
+                if any(
+                    k in raw_l.lower()
+                    for k in [
+                        "millions of",
+                        "thousands of",
+                        "billions of",
+                        "in chf",
+                        "in usd",
+                        "in eur",
+                    ]
+                ):
+                    unit_str = re.sub(r"^[#\s\-*]+", "", raw_l).strip()
                     break
 
             # Find year column headers if present
             years = []
             for i_l in range(len(raw_lines) - 1):
-                if re.match(r"^(202[0-9])$", raw_lines[i_l]) and re.match(r"^(202[0-9])$", raw_lines[i_l + 1]):
+                if re.match(r"^(202[0-9])$", raw_lines[i_l]) and re.match(
+                    r"^(202[0-9])$", raw_lines[i_l + 1]
+                ):
                     years = [raw_lines[i_l], raw_lines[i_l + 1]]
                     break
             if not years:
-                for l in raw_lines:
-                    found_years = re.findall(r"\b(202[0-9])\b", l)
+                for raw_l in raw_lines:
+                    found_years = re.findall(r"\b(202[0-9])\b", raw_l)
                     if len(found_years) >= 2:
                         years = found_years[:2]
                         break
@@ -250,13 +338,19 @@ def synthesize_smart_grounded_answer(
                 overlap = sum(1 for qw in q_words if qw in l_lower)
                 if overlap > 0:
                     inline_nums = re.findall(r"[\d\(\)]+(?:\s+\d+)*", clean_label)
-                    inline_val = [n for n in inline_nums if len(n) >= 2 and not re.match(r"^(202[0-9])$", n)]
+                    inline_val = [
+                        n for n in inline_nums if len(n) >= 2 and not re.match(r"^(202[0-9])$", n)
+                    ]
 
                     # Collect numbers on subsequent lines
                     subsequent_vals = []
                     for next_line in raw_lines[i + 1 : i + 6]:
                         clean_next = next_line.strip()
-                        if re.search(r"[\d\(\)]+", clean_next) and len(clean_next) < 25 and not re.match(r"^(202[0-9])$", clean_next):
+                        if (
+                            re.search(r"[\d\(\)]+", clean_next)
+                            and len(clean_next) < 25
+                            and not re.match(r"^(202[0-9])$", clean_next)
+                        ):
                             subsequent_vals.append(clean_next)
                         else:
                             break
@@ -265,14 +359,35 @@ def synthesize_smart_grounded_answer(
                         if years and len(subsequent_vals) == len(years) + 1:
                             note_ref = subsequent_vals[0]
                             num_vals = subsequent_vals[1:]
-                            val_str = " | ".join(f"{y}: {v}" for y, v in zip(years, num_vals)) + f" (Note {note_ref})"
+                            val_str = (
+                                " | ".join(
+                                    f"{y}: {v}" for y, v in zip(years, num_vals, strict=False)
+                                )
+                                + f" (Note {note_ref})"
+                            )
                         elif years and len(subsequent_vals) == len(years):
-                            val_str = " | ".join(f"{y}: {v}" for y, v in zip(years, subsequent_vals))
+                            val_str = " | ".join(
+                                f"{y}: {v}" for y, v in zip(years, subsequent_vals, strict=False)
+                            )
                         else:
                             val_str = " | ".join(subsequent_vals)
-                        scored_metrics.append((overlap, f"• **{clean_label}**: {val_str}" + (f" ({unit_str})" if unit_str else "") + f" [{idx}]"))
+                        scored_metrics.append(
+                            (
+                                overlap,
+                                f"• **{clean_label}**: {val_str}"
+                                + (f" ({unit_str})" if unit_str else "")
+                                + f" [{idx}]",
+                            )
+                        )
                     elif inline_val:
-                        scored_metrics.append((overlap, f"• **{clean_label}**" + (f" ({unit_str})" if unit_str else "") + f" [{idx}]"))
+                        scored_metrics.append(
+                            (
+                                overlap,
+                                f"• **{clean_label}**"
+                                + (f" ({unit_str})" if unit_str else "")
+                                + f" [{idx}]",
+                            )
+                        )
 
             if scored_metrics:
                 scored_metrics.sort(key=lambda x: x[0], reverse=True)
@@ -289,7 +404,11 @@ def synthesize_smart_grounded_answer(
         if c["overlap"] == 0:
             continue
         idx = c["index"]
-        raw_paras = [p.strip() for p in c["content"].split("\n\n") if len(p.strip()) > 25 and not p.strip().startswith("|")]
+        raw_paras = [
+            p.strip()
+            for p in c["content"].split("\n\n")
+            if len(p.strip()) > 25 and not p.strip().startswith("|")
+        ]
         for p in raw_paras:
             clean_p = re.sub(r"^[#●•\s\-*]+", "", p).strip()
             clean_p = " ".join(clean_p.split())
@@ -307,7 +426,6 @@ def synthesize_smart_grounded_answer(
     top = cleaned_chunks[0]
     first_p = re.sub(r"^[#●•\s\-*]+", "", top["content"][:800]).strip()
     return f"Based on the documents:\n\n{first_p} [{top['index']}]"
-
 
 
 class GenerationService:
@@ -409,7 +527,9 @@ class GenerationService:
                         break
                     else:
                         full_answer.clear()
-                        logger.warning(f"Model {model_name} generated empty response. Trying next...")
+                        logger.warning(
+                            f"Model {model_name} generated empty response. Trying next..."
+                        )
                 except Exception as e:
                     logger.warning(f"Model {model_name} failed: {e}. Attempting fallback...")
                     full_answer.clear()
@@ -431,9 +551,7 @@ class GenerationService:
 
         prompt_tokens = len(context_str.split()) * 4 // 3
         completion_tokens = len(raw_complete_text.split()) * 4 // 3
-        cost_usd = round(
-            (prompt_tokens * 0.0000005) + (completion_tokens * 0.0000015), 6
-        )
+        cost_usd = round((prompt_tokens * 0.0000005) + (completion_tokens * 0.0000015), 6)
 
         yield {"type": "citations", "citations": verified_citations}
         yield {

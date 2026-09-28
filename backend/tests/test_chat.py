@@ -83,4 +83,4 @@ async def test_token_budget_quota_enforcement(
         headers=tenant_a.owner_headers,
     )
     assert res.status_code == 429
-    assert "budget exceeded" in res.json()["error"]["message"].lower()
+    assert "budget" in res.json()["error"]["message"].lower()

@@ -1,7 +1,8 @@
-from datetime import datetime
 import enum
-from typing import TYPE_CHECKING
 import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING
+
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -10,12 +11,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.chunk import Chunk
     from app.models.org import Organization
     from app.models.user import User
-    from app.models.chunk import Chunk
 
 
-class DocumentStatus(str, enum.Enum):
+class DocumentStatus(enum.StrEnum):
     QUEUED = "queued"
     PARSING = "parsing"
     EMBEDDING = "embedding"
@@ -60,7 +61,9 @@ class Document(Base, TimestampMixin):
     # Relationships
     organization: Mapped["Organization"] = relationship("Organization", back_populates="documents")
     uploader: Mapped["User | None"] = relationship("User", back_populates="documents")
-    chunks: Mapped[list["Chunk"]] = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
+    chunks: Mapped[list["Chunk"]] = relationship(
+        "Chunk", back_populates="document", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_documents_org_status", "org_id", "status"),

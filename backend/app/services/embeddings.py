@@ -1,6 +1,7 @@
 import hashlib
 import math
 from typing import Any
+
 try:
     import numpy as np
 except ImportError:
@@ -18,19 +19,31 @@ def get_embedding_model():
     if _model_instance is None:
         try:
             from fastembed import TextEmbedding
+
             logger.info(f"Loading fastembed embedding model: {settings.EMBEDDING_MODEL_NAME}")
-            _model_instance = ("fastembed", TextEmbedding(model_name=settings.EMBEDDING_MODEL_NAME, cache_dir="/tmp/huggingface"))
+            _model_instance = (
+                "fastembed",
+                TextEmbedding(
+                    model_name=settings.EMBEDDING_MODEL_NAME, cache_dir="/tmp/huggingface"
+                ),
+            )
             return _model_instance
         except Exception as e:
             logger.warning(f"Could not load fastembed ({e}). Trying SentenceTransformer...")
 
         try:
             from sentence_transformers import SentenceTransformer
+
             logger.info(f"Loading embedding model: {settings.EMBEDDING_MODEL_NAME}")
-            _model_instance = ("sentence_transformers", SentenceTransformer(settings.EMBEDDING_MODEL_NAME))
+            _model_instance = (
+                "sentence_transformers",
+                SentenceTransformer(settings.EMBEDDING_MODEL_NAME),
+            )
             return _model_instance
         except Exception as e:
-            logger.warning(f"Could not load SentenceTransformer ({e}). Using deterministic embedding fallback.")
+            logger.warning(
+                f"Could not load SentenceTransformer ({e}). Using deterministic embedding fallback."
+            )
             _model_instance = ("fallback", None)
 
     return _model_instance
@@ -57,6 +70,7 @@ class EmbeddingService:
             return vec.tolist()
         else:
             import random
+
             rng = random.Random(seed)
             raw = [rng.gauss(0, 1) for _ in range(self.dimension)]
             norm = math.sqrt(sum(x * x for x in raw))
@@ -96,7 +110,9 @@ class EmbeddingService:
             try:
                 for i in range(0, len(texts), self.batch_size):
                     batch = texts[i : i + self.batch_size]
-                    batch_embeds = model.encode(batch, normalize_embeddings=True, show_progress_bar=False)
+                    batch_embeds = model.encode(
+                        batch, normalize_embeddings=True, show_progress_bar=False
+                    )
                     embeddings.extend(batch_embeds.tolist())
                 return embeddings
             except Exception as e:

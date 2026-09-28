@@ -1,5 +1,6 @@
 import json
 from typing import Any
+
 import numpy as np
 import redis.asyncio as aioredis
 
@@ -58,9 +59,7 @@ class SemanticCache:
 
             if best_score >= self.threshold and best_payload is not None:
                 self.hits += 1
-                logger.info(
-                    f"Semantic cache HIT for org {org_id} (similarity: {best_score:.4f})"
-                )
+                logger.info(f"Semantic cache HIT for org {org_id} (similarity: {best_score:.4f})")
                 return {
                     "answer": best_payload["answer"],
                     "citations": best_payload.get("citations", []),

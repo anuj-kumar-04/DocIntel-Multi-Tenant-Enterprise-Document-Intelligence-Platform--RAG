@@ -1,4 +1,5 @@
 import io
+
 import pytest
 from httpx import AsyncClient
 
@@ -56,14 +57,18 @@ def test_chunker_preserves_table_and_page_metadata():
     chunker = LayoutChunker(target_chunk_size=500, chunk_overlap=50)
 
     blocks = [
-        ParsedBlock(content="Financial highlights for Q1.", page_number=1, element_type="paragraph"),
+        ParsedBlock(
+            content="Financial highlights for Q1.", page_number=1, element_type="paragraph"
+        ),
         ParsedBlock(
             content="| Metric | Q1 | Q2 |\n| --- | --- | --- |\n| Revenue | $10M | $12M |",
             page_number=2,
             element_type="table",
             section_title="Performance Table",
         ),
-        ParsedBlock(content="Subsequent operational notes.", page_number=3, element_type="paragraph"),
+        ParsedBlock(
+            content="Subsequent operational notes.", page_number=3, element_type="paragraph"
+        ),
     ]
 
     chunks = chunker.chunk_blocks(blocks)

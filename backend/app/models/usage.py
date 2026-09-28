@@ -1,5 +1,6 @@
-from typing import TYPE_CHECKING
 import uuid
+from typing import TYPE_CHECKING
+
 from sqlalchemy import BigInteger, ForeignKey, Index, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -30,8 +31,8 @@ class UsageEvent(Base, TimestampMixin):
     cost_usd: Mapped[float] = mapped_column(Numeric(10, 6), default=0.0, nullable=False)
 
     # Relationships
-    organization: Mapped["Organization"] = relationship("Organization", back_populates="usage_events")
-
-    __table_args__ = (
-        Index("ix_usage_events_org_created", "org_id", "created_at"),
+    organization: Mapped["Organization"] = relationship(
+        "Organization", back_populates="usage_events"
     )
+
+    __table_args__ = (Index("ix_usage_events_org_created", "org_id", "created_at"),)

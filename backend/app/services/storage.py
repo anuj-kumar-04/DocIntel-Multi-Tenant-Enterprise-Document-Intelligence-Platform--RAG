@@ -1,6 +1,7 @@
 import io
 import os
 from typing import BinaryIO
+
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
@@ -17,7 +18,7 @@ class StorageService:
         self.endpoint_url = settings.S3_ENDPOINT_URL
         self.local_storage_dir = os.environ.get(
             "STORAGE_DATA_DIR",
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "storage_data"))
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "storage_data")),
         )
         try:
             os.makedirs(self.local_storage_dir, exist_ok=True)

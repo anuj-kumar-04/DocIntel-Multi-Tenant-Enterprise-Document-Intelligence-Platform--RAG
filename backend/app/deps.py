@@ -1,5 +1,6 @@
-from collections.abc import AsyncGenerator
 import uuid
+from collections.abc import AsyncGenerator
+
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
@@ -9,14 +10,20 @@ from app.config import settings
 from app.models.user import User, UserRole
 
 # Async SQLAlchemy Engine & Session Factory
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG and settings.ENVIRONMENT == "development",
-    future=True,
-    pool_pre_ping=True,
-    pool_size=20,
-    max_overflow=10,
-)
+engine_kwargs: dict = {
+    "echo": settings.DEBUG and settings.ENVIRONMENT == "development",
+    "future": True,
+}
+if settings.ENVIRONMENT == "test":
+    from sqlalchemy.pool import NullPool
+
+    engine_kwargs["poolclass"] = NullPool
+elif not settings.DATABASE_URL.startswith("sqlite"):
+    engine_kwargs["pool_pre_ping"] = True
+    engine_kwargs["pool_size"] = 20
+    engine_kwargs["max_overflow"] = 10
+
+engine = create_async_engine(settings.DATABASE_URL, **engine_kwargs)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
@@ -63,7 +70,7 @@ async def get_current_user(
             algorithms=[settings.JWT_ALGORITHM],
         )
         user_id_str: str | None = payload.get("sub")
-        org_id_str: str | None = payload.get("org_id")
+        payload.get("org_id")
         token_type: str | None = payload.get("type")
 
         if user_id_str is None or token_type != "access":
@@ -71,7 +78,7 @@ async def get_current_user(
 
         user_id = uuid.UUID(user_id_str)
     except (JWTError, ValueError):
-        raise credentials_exception
+        raise credentials_exception from None
 
     user = await db.get(User, user_id)
     if not user or not user.is_active:

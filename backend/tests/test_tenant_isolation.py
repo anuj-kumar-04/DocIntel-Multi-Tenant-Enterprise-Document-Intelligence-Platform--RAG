@@ -1,5 +1,5 @@
-import json
 import uuid
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +14,7 @@ async def test_strict_multi_tenant_isolation(
     client: AsyncClient, db_session: AsyncSession, seed_two_tenants
 ):
     """VERIFY ROW-LEVEL TENANT ISOLATION AT THE RETRIEVAL AND SQL LAYER.
-    
+
     Org B possesses a proprietary document with confidential data ('Zephyrite quarterly margin').
     Org A must NEVER be able to retrieve, view, cite, or delete Org B's data under any circumstance.
     """
@@ -75,7 +75,7 @@ async def test_strict_multi_tenant_isolation(
     # Parse SSE stream
     body_text = ask_res.text
     assert "could not find this in the provided documents" in body_text.lower()
-    
+
     # Assert zero citations returned to Org A
     assert '"citations": []' in body_text or '"citations":[]' in body_text
 

@@ -1,12 +1,13 @@
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
-import uuid
 
 from app.config import settings
 from app.core.logging import logger
 
 try:
     from langfuse import Langfuse
+
     _langfuse_client = Langfuse(
         public_key=settings.LANGFUSE_PUBLIC_KEY,
         secret_key=settings.LANGFUSE_SECRET_KEY,

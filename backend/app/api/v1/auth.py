@@ -20,6 +20,7 @@ async def register(req: UserRegisterRequest, db: AsyncSession = Depends(get_db))
     """Register a new organization and its initial owner user in a single transaction."""
     auth_service = AuthService(db)
     user, tokens = await auth_service.register_org_and_owner(req)
+    await db.refresh(user, attribute_names=["organization"])
     return {
         "user": UserResponse.model_validate(user),
         "tokens": tokens,
@@ -31,6 +32,7 @@ async def login(req: UserLoginRequest, db: AsyncSession = Depends(get_db)):
     """Authenticate with email and password to receive JWT access and refresh tokens."""
     auth_service = AuthService(db)
     user, tokens = await auth_service.authenticate_user(req)
+    await db.refresh(user, attribute_names=["organization"])
     return {
         "user": UserResponse.model_validate(user),
         "tokens": tokens,

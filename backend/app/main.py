@@ -1,5 +1,6 @@
-from contextlib import asynccontextmanager
 import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
                 if "postgresql" in settings.DATABASE_URL:
                     try:
                         from sqlalchemy import text
+
                         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
                     except Exception as e:
                         logger.warning(f"Vector extension notice: {e}")

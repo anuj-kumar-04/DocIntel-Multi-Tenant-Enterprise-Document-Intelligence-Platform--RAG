@@ -2,15 +2,15 @@ import asyncio
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # Add backend directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from sqlalchemy import select
+
 from app.core.security import get_password_hash
 from app.deps import AsyncSessionLocal
-from app.models.chat import Conversation, Message, MessageRole
 from app.models.chunk import Chunk
 from app.models.document import Document, DocumentStatus
 from app.models.org import Organization
@@ -122,7 +122,7 @@ async def seed_database():
                 page_count=3,
                 chunk_count=3,
                 status=DocumentStatus.READY,
-                processed_at=datetime.now(timezone.utc),
+                processed_at=datetime.now(UTC),
             )
             session.add(doc_a1)
             await session.flush()
@@ -175,7 +175,9 @@ async def seed_database():
             print("[OK] Seeded Acme Q4 Financial Report with table chunks")
 
         # 5. Seed Documents & Chunks for Org B (Zephyr Industries) - CONFIDENTIAL MARGIN
-        doc_b1_stmt = select(Document).where(Document.filename == "Zephyr_Proprietary_Margin_Analysis.pdf")
+        doc_b1_stmt = select(Document).where(
+            Document.filename == "Zephyr_Proprietary_Margin_Analysis.pdf"
+        )
         if not (await session.execute(doc_b1_stmt)).scalars().first():
             doc_b1 = Document(
                 id=uuid.uuid4(),
@@ -187,7 +189,7 @@ async def seed_database():
                 page_count=2,
                 chunk_count=2,
                 status=DocumentStatus.READY,
-                processed_at=datetime.now(timezone.utc),
+                processed_at=datetime.now(UTC),
             )
             session.add(doc_b1)
             await session.flush()

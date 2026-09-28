@@ -1,8 +1,9 @@
-from datetime import datetime, timedelta, timezone
-from typing import Any
 import uuid
-from jose import jwt
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
 import bcrypt
+from jose import jwt
 
 from app.config import settings
 
@@ -30,7 +31,7 @@ def create_access_token(
     expires_delta: timedelta | None = None,
 ) -> str:
     """Generate signed JWT access token."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expire = now + (
         expires_delta
         if expires_delta is not None
@@ -53,7 +54,7 @@ def create_refresh_token(
     expires_delta: timedelta | None = None,
 ) -> str:
     """Generate signed JWT refresh token."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expire = now + (
         expires_delta
         if expires_delta is not None

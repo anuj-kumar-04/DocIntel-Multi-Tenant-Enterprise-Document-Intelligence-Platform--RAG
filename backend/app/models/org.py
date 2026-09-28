@@ -1,5 +1,6 @@
 import uuid
 from typing import TYPE_CHECKING
+
 from sqlalchemy import BigInteger, String
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -7,10 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
-    from app.models.user import User
-    from app.models.document import Document
     from app.models.chat import Conversation
+    from app.models.document import Document
     from app.models.usage import UsageEvent
+    from app.models.user import User
 
 
 class Organization(Base, TimestampMixin):
@@ -28,7 +29,15 @@ class Organization(Base, TimestampMixin):
     tokens_used_this_month: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
 
     # Relationships
-    users: Mapped[list["User"]] = relationship("User", back_populates="organization", cascade="all, delete-orphan")
-    documents: Mapped[list["Document"]] = relationship("Document", back_populates="organization", cascade="all, delete-orphan")
-    conversations: Mapped[list["Conversation"]] = relationship("Conversation", back_populates="organization", cascade="all, delete-orphan")
-    usage_events: Mapped[list["UsageEvent"]] = relationship("UsageEvent", back_populates="organization", cascade="all, delete-orphan")
+    users: Mapped[list["User"]] = relationship(
+        "User", back_populates="organization", cascade="all, delete-orphan"
+    )
+    documents: Mapped[list["Document"]] = relationship(
+        "Document", back_populates="organization", cascade="all, delete-orphan"
+    )
+    conversations: Mapped[list["Conversation"]] = relationship(
+        "Conversation", back_populates="organization", cascade="all, delete-orphan"
+    )
+    usage_events: Mapped[list["UsageEvent"]] = relationship(
+        "UsageEvent", back_populates="organization", cascade="all, delete-orphan"
+    )

@@ -1,8 +1,9 @@
-from collections.abc import AsyncGenerator
 import json
 import time
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from collections.abc import AsyncGenerator
+
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +29,9 @@ from app.services.retrieval import RetrievalConfig, RetrievalEngine
 router = APIRouter(prefix="/chat", tags=["Chat & RAG"])
 
 
-@router.post("/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_conversation(
     req: ConversationCreateRequest,
     current_user: User = Depends(get_current_user),
@@ -80,9 +83,7 @@ async def list_conversations(
             title=c.title,
             created_at=c.created_at,
             updated_at=c.updated_at,
-            messages=[
-                MessageResponse.model_validate(m) for m in (c.messages or [])
-            ],
+            messages=[MessageResponse.model_validate(m) for m in (c.messages or [])],
         )
         for c in convs
     ]
@@ -114,9 +115,7 @@ async def get_conversation(
         title=conv.title,
         created_at=conv.created_at,
         updated_at=conv.updated_at,
-        messages=[
-            MessageResponse.model_validate(m) for m in (conv.messages or [])
-        ],
+        messages=[MessageResponse.model_validate(m) for m in (conv.messages or [])],
     )
 
 
@@ -177,10 +176,7 @@ async def ask_question_stream(
     await db.commit()
 
     # Format recent history
-    history = [
-        {"role": m.role.value, "content": m.content}
-        for m in (conv.messages or [])[-6:]
-    ]
+    history = [{"role": m.role.value, "content": m.content} for m in (conv.messages or [])[-6:]]
 
     async def sse_event_generator() -> AsyncGenerator[str, None]:
         start_time = time.perf_counter()
@@ -224,11 +220,7 @@ async def ask_question_stream(
                 return
 
             # 5. Hybrid Retrieval
-            retrieval_cfg = (
-                RetrievalConfig.from_version(req.version)
-                if req.version
-                else None
-            )
+            retrieval_cfg = RetrievalConfig.from_version(req.version) if req.version else None
             retrieval_engine = RetrievalEngine(db)
 
             async with trace.span("retrieval", {"version": req.version or "default"}):
@@ -245,7 +237,9 @@ async def ask_question_stream(
             usage_data = {}
 
             async with trace.span("generation"):
-                async for event in generation_service.generate_stream(req.question, chunks, history):
+                async for event in generation_service.generate_stream(
+                    req.question, chunks, history
+                ):
                     event_type = event.get("type")
                     if event_type == "token":
                         collected_text.append(event["token"])

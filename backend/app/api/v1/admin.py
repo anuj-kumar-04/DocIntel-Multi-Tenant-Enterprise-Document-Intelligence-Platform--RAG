@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.deps import get_current_user, get_db, require_role
+from app.deps import get_db, require_role
 from app.models.chat import Conversation, Message
 from app.models.chunk import Chunk
 from app.models.document import Document
@@ -34,9 +34,7 @@ async def get_tenant_usage(
     docs_count = doc_count_res.scalar() or 0
 
     # 3. Count chunks
-    chunk_count_res = await db.execute(
-        select(func.count(Chunk.id)).where(Chunk.org_id == org_id)
-    )
+    chunk_count_res = await db.execute(select(func.count(Chunk.id)).where(Chunk.org_id == org_id))
     chunks_count = chunk_count_res.scalar() or 0
 
     # 4. Count conversations
@@ -55,9 +53,7 @@ async def get_tenant_usage(
 
     # 6. Sum cost from usage events
     cost_res = await db.execute(
-        select(func.coalesce(func.sum(UsageEvent.cost_usd), 0.0)).where(
-            UsageEvent.org_id == org_id
-        )
+        select(func.coalesce(func.sum(UsageEvent.cost_usd), 0.0)).where(UsageEvent.org_id == org_id)
     )
     total_cost = float(cost_res.scalar() or 0.0)
 

@@ -18,7 +18,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
-ignore = ["E501", "B008"]
+ignore = ["E501", "B008", "E402"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -30,8 +30,13 @@ disallow_untyped_defs = false
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "-ra -q --asyncio-mode=auto"
+pythonpath = [
+    ".",
+    "backend",
+]
 testpaths = [
     "tests",
+    "backend/tests",
 ]
 python_files = [
     "test_*.py",

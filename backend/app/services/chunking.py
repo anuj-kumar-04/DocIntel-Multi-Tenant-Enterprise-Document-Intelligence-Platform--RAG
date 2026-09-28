@@ -1,5 +1,6 @@
 import re
 from typing import Any
+
 import tiktoken
 
 from app.services.parsing import ParsedBlock
@@ -99,7 +100,9 @@ class LayoutChunker:
         # Fallback slice by words
         words = text.split()
         word_chunk_size = max(10, max_tokens * 3 // 4)
-        return [" ".join(words[i : i + word_chunk_size]) for i in range(0, len(words), word_chunk_size)]
+        return [
+            " ".join(words[i : i + word_chunk_size]) for i in range(0, len(words), word_chunk_size)
+        ]
 
     def chunk_blocks(self, blocks: list[ParsedBlock]) -> list[ChunkData]:
         """Convert parsed blocks into structured, page-tagged chunks."""

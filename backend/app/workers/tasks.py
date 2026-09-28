@@ -1,9 +1,9 @@
 import asyncio
-from datetime import datetime, timezone
 import uuid
+from datetime import UTC, datetime
+
 from celery import shared_task
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import logger
 from app.deps import AsyncSessionLocal
@@ -61,7 +61,7 @@ async def process_document_pipeline(document_id: str | uuid.UUID) -> dict:
 
             # 8. Bulk create Chunks with denormalized org_id
             db_chunks = []
-            for c_data, emb in zip(chunk_records, embeddings):
+            for c_data, emb in zip(chunk_records, embeddings, strict=False):
                 db_chunk = Chunk(
                     document_id=document.id,
                     org_id=document.org_id,  # Critical tenant denormalization
@@ -80,7 +80,7 @@ async def process_document_pipeline(document_id: str | uuid.UUID) -> dict:
             # 9. Update status -> READY
             document.status = DocumentStatus.READY
             document.chunk_count = len(db_chunks)
-            document.processed_at = datetime.now(timezone.utc)
+            document.processed_at = datetime.now(UTC)
             document.error_message = None
 
             await session.commit()
@@ -118,4 +118,4 @@ def ingest_document(self, document_id: str):
         return asyncio.run(process_document_pipeline(document_id))
     except Exception as exc:
         logger.error(f"Task retry for document {document_id}: {exc}")
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc

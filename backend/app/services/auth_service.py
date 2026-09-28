@@ -1,6 +1,7 @@
-from datetime import datetime, timezone
 import re
 import uuid
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -40,14 +41,18 @@ class AuthService:
         # Check if email is already taken
         user_check = await self.db.execute(select(User).where(User.email == req.email.lower()))
         if user_check.scalars().first():
-            raise DocIntelException("A user with this email address already exists", status_code=409)
+            raise DocIntelException(
+                "A user with this email address already exists", status_code=409
+            )
 
         # Generate unique slug for organization
         base_slug = req.org_slug if req.org_slug else slugify(req.org_name)
         slug = base_slug
         counter = 1
         while True:
-            slug_check = await self.db.execute(select(Organization).where(Organization.slug == slug))
+            slug_check = await self.db.execute(
+                select(Organization).where(Organization.slug == slug)
+            )
             if not slug_check.scalars().first():
                 break
             slug = f"{base_slug}-{counter}"
@@ -72,7 +77,7 @@ class AuthService:
             full_name=req.full_name,
             role=UserRole.OWNER,
             is_active=True,
-            last_login_at=datetime.now(timezone.utc),
+            last_login_at=datetime.now(UTC),
         )
         self.db.add(user)
         await self.db.commit()
@@ -108,7 +113,7 @@ class AuthService:
             raise AuthenticationFailedError("Account has been disabled. Please contact your admin.")
 
         # Update last login timestamp
-        user.last_login_at = datetime.now(timezone.utc)
+        user.last_login_at = datetime.now(UTC)
         await self.db.commit()
         await self.db.refresh(user)
 
@@ -130,7 +135,7 @@ class AuthService:
                 raise AuthenticationFailedError("Invalid token type")
             user_id = uuid.UUID(payload.get("sub"))
         except Exception:
-            raise AuthenticationFailedError("Invalid or expired refresh token")
+            raise AuthenticationFailedError("Invalid or expired refresh token") from None
 
         stmt = select(User).where(User.id == user_id)
         result = await self.db.execute(stmt)
@@ -148,13 +153,13 @@ class AuthService:
             expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         )
 
-    async def invite_member(
-        self, inviter: User, req: MemberInviteRequest
-    ) -> User:
+    async def invite_member(self, inviter: User, req: MemberInviteRequest) -> User:
         """Invite/create a member belonging to inviter's organization."""
         existing = await self.db.execute(select(User).where(User.email == req.email.lower()))
         if existing.scalars().first():
-            raise DocIntelException("A user with this email address already exists", status_code=409)
+            raise DocIntelException(
+                "A user with this email address already exists", status_code=409
+            )
 
         member = User(
             org_id=inviter.org_id,
@@ -171,10 +176,6 @@ class AuthService:
 
     async def list_org_members(self, org_id: uuid.UUID) -> list[User]:
         """List all members belonging strictly to the specified tenant organization."""
-        stmt = (
-            select(User)
-            .where(User.org_id == org_id)
-            .order_by(User.created_at.desc())
-        )
+        stmt = select(User).where(User.org_id == org_id).order_by(User.created_at.desc())
         result = await self.db.execute(stmt)
         return list(result.scalars().all())

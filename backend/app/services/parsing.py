@@ -1,7 +1,8 @@
 import io
 from typing import Any
-import fitz  # PyMuPDF
+
 import docx
+import fitz  # PyMuPDF
 import openpyxl
 
 from app.core.logging import logger
@@ -56,7 +57,9 @@ class DocumentParser:
                             md_lines = ["| " + " | ".join(header) + " |"]
                             md_lines.append("| " + " | ".join(["---"] * len(header)) + " |")
                             for row in df_rows[1:]:
-                                md_lines.append("| " + " | ".join([str(c or "").strip() for c in row]) + " |")
+                                md_lines.append(
+                                    "| " + " | ".join([str(c or "").strip() for c in row]) + " |"
+                                )
                             table_md = "\n".join(md_lines)
                             blocks.append(
                                 ParsedBlock(
@@ -193,20 +196,22 @@ class DocumentParser:
         return blocks, max(1, page_number - 1)
 
     @classmethod
-    def parse(cls, file_bytes: bytes, filename: str, mime_type: str) -> tuple[list[ParsedBlock], int]:
+    def parse(
+        cls, file_bytes: bytes, filename: str, mime_type: str
+    ) -> tuple[list[ParsedBlock], int]:
         """Auto-detect format and parse document contents."""
         lower_name = filename.lower()
         if mime_type == "application/pdf" or lower_name.endswith(".pdf"):
             return cls.parse_pdf(file_bytes)
-        elif (
-            mime_type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"]
-            or lower_name.endswith(".docx")
-        ):
+        elif mime_type in [
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/msword",
+        ] or lower_name.endswith(".docx"):
             return cls.parse_docx(file_bytes)
-        elif (
-            mime_type in ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"]
-            or lower_name.endswith(".xlsx")
-        ):
+        elif mime_type in [
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+        ] or lower_name.endswith(".xlsx"):
             return cls.parse_xlsx(file_bytes)
         else:
             # Fallback for plain text, markdown, csv

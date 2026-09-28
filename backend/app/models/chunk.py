@@ -1,15 +1,16 @@
-from typing import TYPE_CHECKING
 import uuid
-from sqlalchemy import Computed, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import TSVECTOR, UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from typing import TYPE_CHECKING
+
 from pgvector.sqlalchemy import Vector
+from sqlalchemy import Computed, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.document import Document
-    from app.models.org import Organization
 
 
 class Chunk(Base, TimestampMixin):
@@ -31,17 +32,16 @@ class Chunk(Base, TimestampMixin):
         PG_UUID(as_uuid=True),
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
-        index=True,
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    
+
     # Generated TSVECTOR column for Postgres full-text / BM25 search
     content_tsv = mapped_column(
         TSVECTOR,
         Computed("to_tsvector('english', content)", persisted=True),
         nullable=True,
     )
-    
+
     # pgvector embedding: 384 dimensions for BAAI/bge-small-en-v1.5
     embedding = mapped_column(Vector(384), nullable=True)
 
