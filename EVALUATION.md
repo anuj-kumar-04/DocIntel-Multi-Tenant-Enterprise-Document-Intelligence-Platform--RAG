@@ -47,7 +47,7 @@ This document records the empirical evaluation of the DocIntel platform across 3
 DocIntel enforces an automated regression gate in GitHub Actions (`.github/workflows/ci.yml`). Every Pull Request modifying retrieval or generation logic triggers:
 
 ```bash
-python eval/run_eval.py --ci-gate --min-faithfulness 0.85
+python eval/run_eval.py --version v3 --ci-gate --min-faithfulness 0.85
 ```
 
 If faithfulness degrades below 0.85, the CI build fails and blocks the PR from merging.
