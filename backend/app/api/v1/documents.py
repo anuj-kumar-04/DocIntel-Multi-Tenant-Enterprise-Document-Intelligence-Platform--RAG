@@ -76,12 +76,14 @@ async def upload_document(
     existing_result = await db.execute(existing_stmt)
     existing_doc = existing_result.scalars().first()
 
-    if existing_doc and existing_doc.status == DocumentStatus.READY:
+    if existing_doc and existing_doc.status != DocumentStatus.FAILED:
         return DocumentUploadResponse(
             document_id=existing_doc.id,
             filename=existing_doc.filename,
             status=existing_doc.status,
-            message="Document already uploaded and processed for this organization.",
+            message="Document already uploaded and processed for this organization."
+            if existing_doc.status == DocumentStatus.READY
+            else "Document already uploaded and queued for processing.",
             is_duplicate=True,
         )
 
