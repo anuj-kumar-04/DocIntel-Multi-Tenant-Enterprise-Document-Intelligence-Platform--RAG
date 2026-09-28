@@ -36,6 +36,8 @@ export default function AdminPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
+  const [invitePassword, setInvitePassword] = useState("TempPassword123!");
+  const [lastInvitedCreds, setLastInvitedCreds] = useState<{ email: string; pass: string } | null>(null);
   const [inviteSuccess, setInviteSuccess] = useState(false);
 
   useEffect(() => {
@@ -60,20 +62,23 @@ export default function AdminPage() {
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const passToUse = invitePassword || "TempPassword123!";
       await apiRequest("/api/v1/admin/members", {
         method: "POST",
         body: JSON.stringify({
           email: inviteEmail,
           full_name: inviteName,
           role: inviteRole,
-          password: "TempPassword123!",
+          password: passToUse,
         }),
       });
+      setLastInvitedCreds({ email: inviteEmail, pass: passToUse });
       setInviteSuccess(true);
       setInviteEmail("");
       setInviteName("");
+      setInvitePassword("TempPassword123!");
       loadAdminData();
-      setTimeout(() => setInviteSuccess(false), 4000);
+      setTimeout(() => setInviteSuccess(false), 12000);
     } catch (err: any) {
       alert(`Invite failed: ${err.message}`);
     }
@@ -247,10 +252,34 @@ export default function AdminPage() {
                 </select>
               </div>
 
-              {inviteSuccess && (
-                <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 flex items-center space-x-2">
-                  <CheckCircle2 className="h-4 w-4 shrink-0" />
-                  <span>Invitation issued successfully!</span>
+              <div>
+                <label className="block text-xs font-medium text-slate-400">Temporary Password</label>
+                <input
+                  type="text"
+                  required
+                  value={invitePassword}
+                  onChange={(e) => setInvitePassword(e.target.value)}
+                  placeholder="TempPassword123!"
+                  className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                />
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  The invited member will use this password to log in.
+                </span>
+              </div>
+
+              {inviteSuccess && lastInvitedCreds && (
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 space-y-1.5">
+                  <div className="flex items-center space-x-2 font-medium">
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                    <span>Member invited successfully!</span>
+                  </div>
+                  <div className="text-[11px] text-slate-300 bg-slate-950/80 p-2.5 rounded-lg font-mono border border-slate-800 space-y-1">
+                    <div>Email: <strong className="text-white select-all">{lastInvitedCreds.email}</strong></div>
+                    <div>Password: <strong className="text-emerald-400 select-all">{lastInvitedCreds.pass}</strong></div>
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Log out and log in with these credentials to access this organization.
+                  </div>
                 </div>
               )}
 
