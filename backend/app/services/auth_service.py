@@ -178,3 +178,28 @@ class AuthService:
         stmt = select(User).where(User.org_id == org_id).order_by(User.created_at.desc())
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    async def delete_member(self, current_user: User, member_id: uuid.UUID) -> None:
+        """Remove a member from the organization with RBAC and safety checks."""
+        if current_user.id == member_id:
+            raise DocIntelException(
+                "You cannot remove your own account from the organization management console.",
+                status_code=400,
+            )
+
+        stmt = select(User).where(User.id == member_id, User.org_id == current_user.org_id)
+        result = await self.db.execute(stmt)
+        target_member = result.scalars().first()
+
+        if not target_member:
+            raise DocIntelException("Team member not found in your organization.", status_code=404)
+
+        if target_member.role == UserRole.OWNER:
+            raise DocIntelException("The organization owner cannot be removed.", status_code=403)
+
+        if current_user.role == UserRole.ADMIN and target_member.role == UserRole.ADMIN:
+            raise DocIntelException("Administrators cannot remove other administrators.", status_code=403)
+
+        await self.db.delete(target_member)
+        await self.db.commit()
+

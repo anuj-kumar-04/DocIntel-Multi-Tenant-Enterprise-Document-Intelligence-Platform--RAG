@@ -1,3 +1,5 @@
+import uuid
+
 from app.deps import get_db, require_role
 from app.models.chat import Conversation, Message
 from app.models.chunk import Chunk
@@ -130,3 +132,15 @@ async def list_members(
     """List all team members of the tenant organization."""
     auth_svc = AuthService(db)
     return await auth_svc.list_org_members(current_user.org_id)
+
+
+@router.delete("/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_member(
+    member_id: uuid.UUID,
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a team member from the tenant organization."""
+    auth_svc = AuthService(db)
+    await auth_svc.delete_member(current_user, member_id)
+

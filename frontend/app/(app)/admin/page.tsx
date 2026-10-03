@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Navbar from "../../../components/Navbar";
 import { apiRequest } from "../../../lib/api";
-import { Shield, Zap, DollarSign, Users, Database, ArrowUpRight, UserPlus, CheckCircle2 } from "lucide-react";
+import { Shield, Zap, DollarSign, Users, Database, ArrowUpRight, UserPlus, CheckCircle2, UserX } from "lucide-react";
 
 interface UsageData {
   org_id: string;
@@ -40,18 +40,24 @@ export default function AdminPage() {
   const [lastInvitedCreds, setLastInvitedCreds] = useState<{ email: string; pass: string } | null>(null);
   const [inviteSuccess, setInviteSuccess] = useState(false);
 
+  // Current authenticated user & action states
+  const [currentUser, setCurrentUser] = useState<{ id: string; email: string; role: string } | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   useEffect(() => {
     loadAdminData();
   }, []);
 
   const loadAdminData = async () => {
     try {
-      const [uData, mData] = await Promise.all([
+      const [uData, mData, meData] = await Promise.all([
         apiRequest<UsageData>("/api/v1/admin/usage"),
         apiRequest<Member[]>("/api/v1/admin/members"),
+        apiRequest<{ id: string; email: string; role: string }>("/api/v1/auth/me").catch(() => null),
       ]);
       setUsage(uData);
       setMembers(mData || []);
+      if (meData) setCurrentUser(meData);
     } catch (e) {
       console.error("Failed to load admin data", e);
     } finally {
@@ -81,6 +87,25 @@ export default function AdminPage() {
       setTimeout(() => setInviteSuccess(false), 12000);
     } catch (err: any) {
       alert(`Invite failed: ${err.message}`);
+    }
+  };
+
+  const handleDeleteMember = async (memberId: string, memberName: string) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to remove "${memberName}" from the organization? They will immediately lose access.`
+    );
+    if (!confirmed) return;
+
+    setDeletingId(memberId);
+    try {
+      await apiRequest(`/api/v1/admin/members/${memberId}`, {
+        method: "DELETE",
+      });
+      setMembers((prev) => prev.filter((m) => m.id !== memberId));
+    } catch (err: any) {
+      alert(`Failed to remove member: ${err.message}`);
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -176,6 +201,7 @@ export default function AdminPage() {
                     <th className="px-6 py-3">Member</th>
                     <th className="px-6 py-3">Role</th>
                     <th className="px-6 py-3">Joined Date</th>
+                    <th className="px-6 py-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
@@ -200,6 +226,25 @@ export default function AdminPage() {
                       </td>
                       <td className="px-6 py-3.5 text-xs text-slate-400">
                         {new Date(m.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-3.5 text-right">
+                        {m.id === currentUser?.id ? (
+                          <span className="text-xs text-slate-500 italic">You</span>
+                        ) : m.role === "owner" ? (
+                          <span className="text-xs text-purple-400/80 font-medium">Owner (Protected)</span>
+                        ) : currentUser?.role === "admin" && m.role === "admin" ? (
+                          <span className="text-xs text-slate-500 italic">Admin (Protected)</span>
+                        ) : (
+                          <button
+                            onClick={() => handleDeleteMember(m.id, m.full_name || m.email)}
+                            disabled={deletingId === m.id}
+                            className="inline-flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium text-rose-400 hover:text-rose-200 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 hover:border-rose-500/40 rounded-lg transition disabled:opacity-50"
+                            title="Remove member from company"
+                          >
+                            <UserX className="h-3.5 w-3.5" />
+                            <span>{deletingId === m.id ? "Removing..." : "Remove"}</span>
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

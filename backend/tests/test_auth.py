@@ -115,3 +115,40 @@ async def test_get_current_user_profile(client: AsyncClient, seed_two_tenants):
     res = await client.get("/api/v1/auth/me", headers=tenant_a.owner_headers)
     assert res.status_code == 200
     assert res.json()["email"] == tenant_a.owner.email
+
+
+@pytest.mark.asyncio
+async def test_delete_member_flow(client: AsyncClient, seed_two_tenants):
+    """Test owner can delete a member, members cannot delete, and self-delete is rejected."""
+    tenant_a, tenant_b = seed_two_tenants
+
+    # 1. Standard member cannot call delete member endpoint (403 Forbidden)
+    res_member = await client.delete(
+        f"/api/v1/admin/members/{tenant_a.member.id}", headers=tenant_a.member_headers
+    )
+    assert res_member.status_code == 403
+
+    # 2. Owner cannot delete their own account (400 Bad Request)
+    res_self = await client.delete(
+        f"/api/v1/admin/members/{tenant_a.owner.id}", headers=tenant_a.owner_headers
+    )
+    assert res_self.status_code == 400
+
+    # 3. Owner cannot delete a member of another tenant (404 Not Found)
+    res_cross = await client.delete(
+        f"/api/v1/admin/members/{tenant_b.member.id}", headers=tenant_a.owner_headers
+    )
+    assert res_cross.status_code == 404
+
+    # 4. Owner successfully deletes member of their own tenant (204 No Content)
+    res_delete = await client.delete(
+        f"/api/v1/admin/members/{tenant_a.member.id}", headers=tenant_a.owner_headers
+    )
+    assert res_delete.status_code == 204
+
+    # 5. Deleted member no longer appears in members list
+    res_list = await client.get("/api/v1/admin/members", headers=tenant_a.owner_headers)
+    assert res_list.status_code == 200
+    member_ids = [m["id"] for m in res_list.json()]
+    assert str(tenant_a.member.id) not in member_ids
+

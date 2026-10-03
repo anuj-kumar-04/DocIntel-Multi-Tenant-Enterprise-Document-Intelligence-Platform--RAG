@@ -48,9 +48,11 @@ class User(Base, TimestampMixin):
 
     # Relationships
     organization: Mapped["Organization"] = relationship("Organization", back_populates="users")
-    documents: Mapped[list["Document"]] = relationship("Document", back_populates="uploader")
+    documents: Mapped[list["Document"]] = relationship(
+        "Document", back_populates="uploader", passive_deletes=True
+    )
     conversations: Mapped[list["Conversation"]] = relationship(
-        "Conversation", back_populates="user"
+        "Conversation", back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
 
     __table_args__ = (Index("ix_users_org_role", "org_id", "role"),)
