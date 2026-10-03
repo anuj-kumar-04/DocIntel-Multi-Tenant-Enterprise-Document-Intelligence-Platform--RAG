@@ -151,4 +151,3 @@ async def test_delete_member_flow(client: AsyncClient, seed_two_tenants):
     assert res_list.status_code == 200
     member_ids = [m["id"] for m in res_list.json()]
     assert str(tenant_a.member.id) not in member_ids
-

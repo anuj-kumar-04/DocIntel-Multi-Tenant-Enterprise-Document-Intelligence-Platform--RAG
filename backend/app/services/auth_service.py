@@ -198,8 +198,9 @@ class AuthService:
             raise DocIntelException("The organization owner cannot be removed.", status_code=403)
 
         if current_user.role == UserRole.ADMIN and target_member.role == UserRole.ADMIN:
-            raise DocIntelException("Administrators cannot remove other administrators.", status_code=403)
+            raise DocIntelException(
+                "Administrators cannot remove other administrators.", status_code=403
+            )
 
         await self.db.delete(target_member)
         await self.db.commit()
-

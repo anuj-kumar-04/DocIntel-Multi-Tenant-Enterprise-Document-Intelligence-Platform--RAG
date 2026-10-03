@@ -143,4 +143,3 @@ async def delete_member(
     """Remove a team member from the tenant organization."""
     auth_svc = AuthService(db)
     await auth_svc.delete_member(current_user, member_id)
-
