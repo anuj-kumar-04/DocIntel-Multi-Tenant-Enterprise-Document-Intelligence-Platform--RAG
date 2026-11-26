@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import Navbar from "../../../components/Navbar";
 import UploadDropzone from "../../../components/UploadDropzone";
 import { apiRequest } from "../../../lib/api";
-import { FileText, Trash2, CheckCircle2, Clock, AlertTriangle, Layers, BookOpen } from "lucide-react";
+import { FileText, Trash2, CheckCircle2, Clock, AlertTriangle, Layers, BookOpen, MessageSquare } from "lucide-react";
 
 interface DocumentItem {
   id: string;
@@ -153,13 +154,25 @@ export default function DocumentsPage() {
                         {(doc.size_bytes / 1024).toFixed(1)} KB
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <button
-                          onClick={() => handleDelete(doc.id)}
-                          className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition"
-                          title="Delete Document"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        <div className="inline-flex items-center space-x-2">
+                          {doc.status === "ready" && (
+                            <Link
+                              href={`/chat?doc=${doc.id}`}
+                              className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-blue-600/15 text-blue-300 hover:bg-blue-600/25 border border-blue-500/30 text-xs font-medium transition"
+                              title="Ask questions strictly from this PDF"
+                            >
+                              <MessageSquare className="h-3.5 w-3.5" />
+                              <span>Ask PDF</span>
+                            </Link>
+                          )}
+                          <button
+                            onClick={() => handleDelete(doc.id)}
+                            className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition"
+                            title="Delete Document"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

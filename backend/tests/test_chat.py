@@ -1,4 +1,7 @@
+import uuid
+
 import pytest
+from app.models.document import Document, DocumentStatus
 from app.models.org import Organization
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,3 +86,70 @@ async def test_token_budget_quota_enforcement(
     )
     assert res.status_code == 429
     assert "budget" in res.json()["error"]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_conversation_document_pinning_and_cross_tenant_block(
+    client: AsyncClient, db_session: AsyncSession, seed_two_tenants
+):
+    """Verify PDF pinning persists on conversations and rejects cross-tenant document UUIDs."""
+    tenant_a, tenant_b = seed_two_tenants
+
+    doc_a = Document(
+        id=uuid.uuid4(),
+        org_id=tenant_a.org.id,
+        filename="PolicyA.pdf",
+        s3_key=f"org_{tenant_a.org.id}/PolicyA.pdf",
+        mime_type="application/pdf",
+        size_bytes=1200,
+        page_count=1,
+        chunk_count=0,
+        status=DocumentStatus.READY,
+    )
+    doc_b = Document(
+        id=uuid.uuid4(),
+        org_id=tenant_b.org.id,
+        filename="SecretB.pdf",
+        s3_key=f"org_{tenant_b.org.id}/SecretB.pdf",
+        mime_type="application/pdf",
+        size_bytes=1200,
+        page_count=1,
+        chunk_count=0,
+        status=DocumentStatus.READY,
+    )
+    db_session.add_all([doc_a, doc_b])
+    await db_session.commit()
+
+    # 1. Create session pinned to tenant A's PDF
+    create_res = await client.post(
+        "/api/v1/chat/conversations",
+        json={"title": "Policy Session", "document_ids": [str(doc_a.id)]},
+        headers=tenant_a.owner_headers,
+    )
+    assert create_res.status_code == 201
+    conv = create_res.json()
+    assert conv["document_ids"] == [str(doc_a.id)]
+
+    # 2. Attempt to pin Tenant B's document UUID -> 404 (cross-tenant IDOR blocked)
+    cross_patch = await client.patch(
+        f"/api/v1/chat/conversations/{conv['id']}",
+        json={"document_ids": [str(doc_b.id)]},
+        headers=tenant_a.owner_headers,
+    )
+    assert cross_patch.status_code == 404
+
+    cross_ask = await client.post(
+        f"/api/v1/chat/conversations/{conv['id']}/ask",
+        json={"question": "Summarize this", "document_ids": [str(doc_b.id)]},
+        headers=tenant_a.owner_headers,
+    )
+    assert cross_ask.status_code == 404
+
+    # 3. Clear pin back to workspace-wide
+    clear_patch = await client.patch(
+        f"/api/v1/chat/conversations/{conv['id']}",
+        json={"document_ids": []},
+        headers=tenant_a.owner_headers,
+    )
+    assert clear_patch.status_code == 200
+    assert clear_patch.json()["document_ids"] is None

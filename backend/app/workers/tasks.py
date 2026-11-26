@@ -6,6 +6,7 @@ from app.core.logging import logger
 from app.deps import AsyncSessionLocal
 from app.models.chunk import Chunk
 from app.models.document import Document, DocumentStatus
+from app.services.cache import semantic_cache
 from app.services.chunking import LayoutChunker
 from app.services.embeddings import embedding_service
 from app.services.parsing import DocumentParser
@@ -83,6 +84,7 @@ async def process_document_pipeline(document_id: str | uuid.UUID) -> dict:
             document.error_message = None
 
             await session.commit()
+            await semantic_cache.invalidate_org(str(document.org_id))
             logger.info(
                 f"Document {doc_uuid} successfully ingested: {len(db_chunks)} chunks, {page_count} pages"
             )

@@ -1,5 +1,6 @@
 import hashlib
 import math
+import re
 from typing import Any
 
 try:
@@ -11,12 +12,17 @@ from app.config import settings
 from app.core.logging import logger
 
 _model_instance: Any = None
+_INVISIBLE_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\ufeff]")
 
 
 def get_embedding_model():
     """Lazy load fastembed or sentence-transformers model instance."""
     global _model_instance
     if _model_instance is None:
+        if settings.ENVIRONMENT == "test":
+            _model_instance = ("fallback", None)
+            return _model_instance
+
         try:
             from fastembed import TextEmbedding
 
@@ -42,7 +48,7 @@ def get_embedding_model():
             return _model_instance
         except Exception as e:
             logger.warning(
-                f"Could not load SentenceTransformer ({e}). Using deterministic embedding fallback."
+                f"Could not load SentenceTransformer ({e}). Using deterministic feature-hash embedding."
             )
             _model_instance = ("fallback", None)
 
@@ -50,31 +56,55 @@ def get_embedding_model():
 
 
 class EmbeddingService:
-    """Embedding generation service with batching and fallbacks."""
+    """Embedding generation service with batching and semantic feature-hash fallback."""
 
     def __init__(self, dimension: int = 384, batch_size: int = 64):
         self.dimension = dimension
         self.batch_size = batch_size
 
+    def _hash_feature(self, feature: str) -> tuple[int, float]:
+        digest = hashlib.blake2b(feature.encode("utf-8"), digest_size=8).digest()
+        val = int.from_bytes(digest, "big")
+        bucket = val % self.dimension
+        sign = 1.0 if ((val >> 8) & 1) else -1.0
+        return bucket, sign
+
     def _fallback_embed(self, text: str) -> list[float]:
-        """Produce deterministic 384-dim normalized vector from text content."""
-        h = hashlib.sha256(text.encode("utf-8")).digest()
-        seed = int.from_bytes(h[:4], "big")
+        """Produce deterministic 384-dim signed feature-hash vector preserving lexical similarity."""
+        cleaned = _INVISIBLE_RE.sub("", text or "").lower()
+        tokens = re.findall(r"[a-z0-9]+", cleaned)
+        if not tokens:
+            vec = [0.0] * self.dimension
+            vec[0] = 1.0
+            return vec
+
+        raw = [0.0] * self.dimension
+
+        for tok in tokens:
+            bucket, sign = self._hash_feature(f"w:{tok}")
+            raw[bucket] += sign * 2.0
+            if len(tok) > 4:
+                # Prefix stem proxy handles inflections (opened/open, refunds/refund)
+                b_stem, s_stem = self._hash_feature(f"s:{tok[:5]}")
+                raw[b_stem] += s_stem * 1.4
+            if len(tok) >= 4:
+                for i in range(len(tok) - 3):
+                    b_ng, s_ng = self._hash_feature(f"c:{tok[i : i + 4]}")
+                    raw[b_ng] += s_ng * 0.45
+
+        for i in range(len(tokens) - 1):
+            b_bi, s_bi = self._hash_feature(f"b:{tokens[i]}_{tokens[i + 1]}")
+            raw[b_bi] += s_bi * 1.25
 
         if np is not None:
-            rng = np.random.RandomState(seed)
-            vec = rng.randn(self.dimension).astype(np.float32)
-            norm = np.linalg.norm(vec)
+            arr = np.array(raw, dtype=np.float32)
+            norm = float(np.linalg.norm(arr))
             if norm > 0:
-                vec = vec / norm
-            return vec.tolist()
-        else:
-            import random
+                arr = arr / norm
+            return arr.tolist()
 
-            rng = random.Random(seed)
-            raw = [rng.gauss(0, 1) for _ in range(self.dimension)]
-            norm = math.sqrt(sum(x * x for x in raw))
-            return [x / norm for x in raw] if norm > 0 else raw
+        norm = math.sqrt(sum(x * x for x in raw))
+        return [x / norm for x in raw] if norm > 0 else raw
 
     def embed_query(self, query: str) -> list[float]:
         """Embed a single query string."""
@@ -118,7 +148,6 @@ class EmbeddingService:
             except Exception as e:
                 logger.warning(f"Batch embedding model inference failed: {e}. Falling back.")
 
-        # Fallback path
         return [self._fallback_embed(t) for t in texts]
 
 

@@ -31,14 +31,21 @@ class SemanticCache:
             return 0.0
         return float(np.dot(a, b) / (norm_a * norm_b))
 
-    async def get(self, org_id: str, query: str) -> dict[str, Any] | None:
-        """Look up answer in semantic cache for the tenant organization."""
+    @staticmethod
+    def _build_cache_key(org_id: str, scope: str = "all") -> str:
+        clean_scope = scope.strip() or "all"
+        if clean_scope == "all":
+            return f"org:{org_id}:semantic_cache"
+        return f"org:{org_id}:semantic_cache:{clean_scope}"
+
+    async def get(self, org_id: str, query: str, scope: str = "all") -> dict[str, Any] | None:
+        """Look up answer in semantic cache for the tenant organization and document scope."""
         if not settings.SEMANTIC_CACHE_ENABLED:
             return None
 
         try:
             r = await self._get_redis()
-            cache_key = f"org:{org_id}:semantic_cache"
+            cache_key = self._build_cache_key(org_id, scope)
             entries = await r.hgetall(cache_key)
 
             if not entries:
@@ -58,7 +65,9 @@ class SemanticCache:
 
             if best_score >= self.threshold and best_payload is not None:
                 self.hits += 1
-                logger.info(f"Semantic cache HIT for org {org_id} (similarity: {best_score:.4f})")
+                logger.info(
+                    f"Semantic cache HIT for org {org_id} scope={scope} (similarity: {best_score:.4f})"
+                )
                 return {
                     "answer": best_payload["answer"],
                     "citations": best_payload.get("citations", []),
@@ -80,14 +89,15 @@ class SemanticCache:
         query: str,
         answer: str,
         citations: list[dict[str, Any]],
+        scope: str = "all",
     ) -> None:
-        """Store query, embedding, and generated answer in cache."""
+        """Store query, embedding, and generated answer in cache scoped to document selection."""
         if not settings.SEMANTIC_CACHE_ENABLED:
             return
 
         try:
             r = await self._get_redis()
-            cache_key = f"org:{org_id}:semantic_cache"
+            cache_key = self._build_cache_key(org_id, scope)
             query_vec = embedding_service.embed_query(query)
 
             entry_data = {
@@ -96,7 +106,7 @@ class SemanticCache:
                 "answer": answer,
                 "citations": citations,
             }
-            # Limit cache size per org to 200 items to conserve memory
+            # Limit cache size per org+scope to 200 items to conserve memory
             cache_len = await r.hlen(cache_key)
             if cache_len > 200:
                 keys = await r.hkeys(cache_key)
@@ -110,6 +120,16 @@ class SemanticCache:
             await r.expire(cache_key, 7 * 86400)
         except Exception as e:
             logger.warning(f"Failed to write to semantic cache: {e}")
+
+    async def invalidate_org(self, org_id: str) -> None:
+        """Invalidate all cached answers for an organization when its documents change."""
+        try:
+            r = await self._get_redis()
+            keys = await r.keys(f"org:{org_id}:semantic_cache*")
+            if keys:
+                await r.delete(*keys)
+        except Exception as e:
+            logger.debug(f"Semantic cache invalidation skipped: {e}")
 
     def get_hit_rate(self) -> float:
         total = self.hits + self.misses

@@ -80,7 +80,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: docintel-worker
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.workers.celery_app worker -Q document_ingestion,celery --loglevel=info --concurrency=2
     env_file:
       - .env
     environment:

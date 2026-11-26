@@ -57,6 +57,12 @@ async def lifespan(app: FastAPI):
                     except Exception as e:
                         logger.warning(f"Vector extension notice: {e}")
                 await conn.run_sync(Base.metadata.create_all)
+                if "postgresql" in settings.DATABASE_URL:
+                    await conn.execute(
+                        text(
+                            "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS document_ids JSONB;"
+                        )
+                    )
             logger.info("Database schema initialized successfully")
         except Exception as e:
             logger.warning(f"Database schema auto-creation notice: {e}")

@@ -1,10 +1,20 @@
 import io
+import re
 from typing import Any
 
 import docx
 import fitz  # PyMuPDF
 import openpyxl
 from app.core.logging import logger
+
+_INVISIBLE_CHARS_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\ufeff]")
+
+
+def _clean_text(raw: str | None) -> str:
+    """Strip invisible bidi/control markers that degrade full-text indexing."""
+    if not raw:
+        return ""
+    return _INVISIBLE_CHARS_RE.sub("", raw).strip()
 
 
 class ParsedBlock:
@@ -15,10 +25,10 @@ class ParsedBlock:
         element_type: str = "paragraph",
         section_title: str | None = None,
     ):
-        self.content = content.strip()
+        self.content = _clean_text(content)
         self.page_number = page_number
         self.element_type = element_type
-        self.section_title = section_title
+        self.section_title = _clean_text(section_title) or None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -71,10 +81,10 @@ class DocumentParser:
             except Exception as e:
                 logger.debug(f"Table finder skipped on page {page_number}: {e}")
 
-            # 2. Extract text blocks
-            text_blocks = page.get_text("blocks")
+            # 2. Extract text blocks in visual reading order
+            text_blocks = page.get_text("blocks", sort=True)
             for b in text_blocks:
-                text = b[4].strip()
+                text = _clean_text(b[4])
                 if not text:
                     continue
                 # Heuristic heading detection: short line, capitalized, ends without period

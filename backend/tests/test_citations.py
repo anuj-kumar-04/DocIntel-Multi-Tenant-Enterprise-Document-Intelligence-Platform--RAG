@@ -100,3 +100,23 @@ def test_refusal_cleans_any_citations():
 
     assert "[1]" not in cleaned
     assert citations == []
+
+
+def test_partial_grounded_answer_retains_valid_citations():
+    """Mixed responses keep valid citations for answered parts when noting missing info."""
+    sources = [
+        {
+            "index": 1,
+            "chunk_id": "c1",
+            "document_id": "d1",
+            "filename": "policy.pdf",
+            "page": 1,
+            "snippet": "Returns allowed within 30 days.",
+        },
+    ]
+    raw_answer = f"Returns are allowed within 30 days [1]. Regarding the unrelated question: {REFUSAL_MESSAGE}"
+    cleaned, citations = verify_and_clean_citations(raw_answer, sources)
+
+    assert "[1]" in cleaned
+    assert len(citations) == 1
+    assert citations[0]["index"] == 1

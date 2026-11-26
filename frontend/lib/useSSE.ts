@@ -26,13 +26,19 @@ export function useSSE() {
       conversationId: string,
       question: string,
       version: string | null = null,
-      options: UseSSEOptions = {}
+      options: UseSSEOptions = {},
+      documentIds: string[] | null = null
     ) => {
       setIsStreaming(true);
       const token = getStoredToken();
       const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
       try {
+        const payload: Record<string, any> = { question, version };
+        if (documentIds !== null) {
+          payload.document_ids = documentIds;
+        }
+
         const response = await fetch(
           `${apiUrl}/api/v1/chat/conversations/${conversationId}/ask`,
           {
@@ -41,7 +47,7 @@ export function useSSE() {
               "Content-Type": "application/json",
               Authorization: token ? `Bearer ${token}` : "",
             },
-            body: JSON.stringify({ question, version }),
+            body: JSON.stringify(payload),
           }
         );
 

@@ -41,6 +41,8 @@ class Conversation(Base, TimestampMixin):
         index=True,
     )
     title: Mapped[str] = mapped_column(String(255), default="New Conversation", nullable=False)
+    # Optional list of document UUID strings pinning this session strictly to specific PDF(s)
+    document_ids: Mapped[list[str] | None] = mapped_column(JSONB, default=None, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),

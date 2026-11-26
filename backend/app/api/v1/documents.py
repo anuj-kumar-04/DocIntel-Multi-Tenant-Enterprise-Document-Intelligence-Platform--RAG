@@ -18,6 +18,7 @@ from app.schemas.document import (
     DocumentUploadResponse,
 )
 from app.services.audit import AuditService
+from app.services.cache import semantic_cache
 from app.services.storage import storage_service
 from app.workers.tasks import ingest_document, process_document_pipeline
 from fastapi import (
@@ -318,6 +319,7 @@ async def delete_document(
     # Delete from database (cascades to chunks)
     await db.delete(doc)
     await db.commit()
+    await semantic_cache.invalidate_org(str(current_user.org_id))
 
     await AuditService(db).log_event(
         action="DOCUMENT_DELETED",

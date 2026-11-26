@@ -9,11 +9,13 @@ from app.core.rate_limit import limiter
 from app.core.tracing import TraceContext
 from app.deps import get_current_user, get_db
 from app.models.chat import Conversation, Message, MessageRole
+from app.models.document import Document
 from app.models.user import User
 from app.schemas.chat import (
     AskRequest,
     ConversationCreateRequest,
     ConversationResponse,
+    ConversationUpdateRequest,
     MessageResponse,
 )
 from app.services.budget import BudgetService
@@ -30,6 +32,40 @@ from sqlalchemy.orm import selectinload
 router = APIRouter(prefix="/chat", tags=["Chat & RAG"])
 
 
+async def _validate_scoped_documents(
+    db: AsyncSession, org_id: uuid.UUID, doc_ids: list[uuid.UUID] | None
+) -> list[uuid.UUID] | None:
+    """Validate that all requested document UUIDs exist and belong strictly to the caller's org."""
+    if not doc_ids:
+        return None
+    unique_ids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for did in doc_ids:
+        if did not in seen:
+            seen.add(did)
+            unique_ids.append(did)
+
+    stmt = select(Document.id).where(Document.org_id == org_id, Document.id.in_(unique_ids))
+    rows = await db.execute(stmt)
+    found_ids = {r[0] for r in rows.fetchall()}
+    missing = [str(did) for did in unique_ids if did not in found_ids]
+    if missing:
+        raise ResourceNotFoundError("Document", missing[0])
+    return unique_ids
+
+
+def _parse_conv_doc_ids(raw_ids: list[str] | None) -> list[uuid.UUID] | None:
+    if not raw_ids:
+        return None
+    parsed: list[uuid.UUID] = []
+    for item in raw_ids:
+        try:
+            parsed.append(uuid.UUID(str(item)))
+        except ValueError:
+            continue
+    return parsed or None
+
+
 @router.post(
     "/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED
 )
@@ -39,10 +75,12 @@ async def create_conversation(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new conversational session within tenant organization."""
+    valid_doc_ids = await _validate_scoped_documents(db, current_user.org_id, req.document_ids)
     conv = Conversation(
         org_id=current_user.org_id,
         user_id=current_user.id,
         title=req.title,
+        document_ids=[str(d) for d in valid_doc_ids] if valid_doc_ids else None,
     )
     db.add(conv)
     await db.commit()
@@ -53,6 +91,7 @@ async def create_conversation(
         org_id=conv.org_id,
         user_id=conv.user_id,
         title=conv.title,
+        document_ids=valid_doc_ids,
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         messages=[],
@@ -82,6 +121,7 @@ async def list_conversations(
             org_id=c.org_id,
             user_id=c.user_id,
             title=c.title,
+            document_ids=_parse_conv_doc_ids(c.document_ids),
             created_at=c.created_at,
             updated_at=c.updated_at,
             messages=[MessageResponse.model_validate(m) for m in (c.messages or [])],
@@ -115,6 +155,54 @@ async def get_conversation(
         org_id=conv.org_id,
         user_id=conv.user_id,
         title=conv.title,
+        document_ids=_parse_conv_doc_ids(conv.document_ids),
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+        messages=[MessageResponse.model_validate(m) for m in (conv.messages or [])],
+    )
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ConversationResponse)
+async def update_conversation(
+    conversation_id: uuid.UUID,
+    req: ConversationUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update conversation title or strictly pin/unpin scoped document UUIDs."""
+    stmt = (
+        select(Conversation)
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.org_id == current_user.org_id,
+            Conversation.user_id == current_user.id,
+        )
+        .options(selectinload(Conversation.messages))
+    )
+    result = await db.execute(stmt)
+    conv = result.scalars().first()
+    if not conv:
+        raise ResourceNotFoundError("Conversation", str(conversation_id))
+
+    if req.title is not None:
+        conv.title = req.title
+    if req.document_ids is not None:
+        if len(req.document_ids) == 0:
+            conv.document_ids = None
+        else:
+            valid_doc_ids = await _validate_scoped_documents(
+                db, current_user.org_id, req.document_ids
+            )
+            conv.document_ids = [str(d) for d in valid_doc_ids] if valid_doc_ids else None
+
+    await db.commit()
+    await db.refresh(conv)
+    return ConversationResponse(
+        id=conv.id,
+        org_id=conv.org_id,
+        user_id=conv.user_id,
+        title=conv.title,
+        document_ids=_parse_conv_doc_ids(conv.document_ids),
         created_at=conv.created_at,
         updated_at=conv.updated_at,
         messages=[MessageResponse.model_validate(m) for m in (conv.messages or [])],
@@ -179,6 +267,30 @@ async def ask_question_stream(
     if not conv:
         raise ResourceNotFoundError("Conversation", str(conversation_id))
 
+    # 2b. Resolve & validate strict document scope (request overrides conversation pin when provided)
+    if req.document_ids is not None:
+        if len(req.document_ids) == 0:
+            scoped_doc_ids = None
+        else:
+            scoped_doc_ids = await _validate_scoped_documents(
+                db, current_user.org_id, req.document_ids
+            )
+    else:
+        raw_conv_docs = _parse_conv_doc_ids(conv.document_ids)
+        if raw_conv_docs:
+            # Keep only docs that still exist in org (in case one was deleted)
+            stmt_docs = select(Document.id).where(
+                Document.org_id == current_user.org_id,
+                Document.id.in_(raw_conv_docs),
+            )
+            found_rows = await db.execute(stmt_docs)
+            valid_set = {r[0] for r in found_rows.fetchall()}
+            scoped_doc_ids = [d for d in raw_conv_docs if d in valid_set] or None
+        else:
+            scoped_doc_ids = None
+
+    cache_scope = ",".join(sorted(str(d) for d in scoped_doc_ids)) if scoped_doc_ids else "all"
+
     # 3. Persist user question
     user_msg = Message(
         conversation_id=conv.id,
@@ -203,17 +315,21 @@ async def ask_question_stream(
             metadata={
                 "retrieval_version": req.version or "v3",
                 "user_email": current_user.email,
+                "document_scope": cache_scope,
             },
         )
 
         async with trace.start_root():
             try:
-                # 4. Semantic cache check
+                # 4. Semantic cache check (strictly scoped by org + selected PDFs)
                 cached_result = None
                 async with trace.cache_step(
-                    name="semantic_cache_lookup", input_data={"question": req.question}
+                    name="semantic_cache_lookup",
+                    input_data={"question": req.question, "scope": cache_scope},
                 ) as cache_obs:
-                    cached_result = await semantic_cache.get(str(current_user.org_id), req.question)
+                    cached_result = await semantic_cache.get(
+                        str(current_user.org_id), req.question, scope=cache_scope
+                    )
                     if cache_obs:
                         cache_obs.update(output={"hit": bool(cached_result)})
 
@@ -267,6 +383,7 @@ async def ask_question_stream(
                         org_id=current_user.org_id,
                         history=history,
                         config=retrieval_cfg,
+                        document_ids=scoped_doc_ids,
                     )
                     if ret_obs:
                         ret_obs.update(
@@ -346,6 +463,7 @@ async def ask_question_stream(
                         req.question,
                         full_answer,
                         final_citations,
+                        scope=cache_scope,
                     )
 
                 trace.log_generation(

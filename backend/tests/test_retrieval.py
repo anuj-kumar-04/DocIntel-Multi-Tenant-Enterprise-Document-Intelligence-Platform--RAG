@@ -1,8 +1,15 @@
+import uuid
+
 import pytest
+from app.models.chunk import Chunk
+from app.models.document import Document, DocumentStatus
 from app.services.cache import SemanticCache
+from app.services.embeddings import embedding_service
 from app.services.retrieval import (
     QueryRewriter,
     RetrievalConfig,
+    RetrievalEngine,
+    _extract_keywords,
     reciprocal_rank_fusion,
 )
 
@@ -78,3 +85,136 @@ async def test_semantic_cache_operations():
     if hit:
         assert hit["answer"] == ans
         assert hit["cached"] is True
+
+
+def test_keyword_extraction_strips_filler_words():
+    """Stopwords like can/get/full/overview/details must not hijack sparse retrieval."""
+    kws = _extract_keywords("Can I get a full refund on an opened bag of coffee?")
+    assert "can" not in kws
+    assert "get" not in kws
+    assert {"refund", "opened", "bag", "coffee"}.issubset(set(kws))
+
+
+def test_feature_hash_embedding_prefers_relevant_policy():
+    """Feature-hashed fallback vectors preserve meaningful similarity vs unrelated docs."""
+    import numpy as np
+
+    q_vec = np.array(
+        embedding_service.embed_query("Can I get a full refund on an opened bag of coffee?")
+    )
+    policy_vec = np.array(
+        embedding_service.embed_query(
+            "Return & Refund Policy: Unopened bags can be returned within 30 days for a full refund. "
+            "Opened bags qualify for a replacement or store credit within 14 days for quality issues."
+        )
+    )
+    noise_vec = np.array(
+        embedding_service.embed_query("DBMS Relational Model functional dependency SQL tuples")
+    )
+    assert float(np.dot(q_vec, policy_vec)) > float(np.dot(q_vec, noise_vec))
+
+
+@pytest.mark.asyncio
+async def test_retrieval_strict_pdf_scope_and_complete_policy(db_session, seed_two_tenants):
+    """Verify scoped retrieval checks all pages of the target PDF and never leaks other docs."""
+    tenant_a, _ = seed_two_tenants
+
+    noise_doc = Document(
+        id=uuid.uuid4(),
+        org_id=tenant_a.org.id,
+        filename="DBMS_Notes.pdf",
+        s3_key=f"org_{tenant_a.org.id}/DBMS_Notes.pdf",
+        mime_type="application/pdf",
+        size_bytes=5000,
+        page_count=10,
+        chunk_count=10,
+        status=DocumentStatus.READY,
+    )
+    policy_doc = Document(
+        id=uuid.uuid4(),
+        org_id=tenant_a.org.id,
+        filename="Northwind_Policy.pdf",
+        s3_key=f"org_{tenant_a.org.id}/Northwind_Policy.pdf",
+        mime_type="application/pdf",
+        size_bytes=2000,
+        page_count=2,
+        chunk_count=2,
+        status=DocumentStatus.READY,
+    )
+    db_session.add_all([noise_doc, policy_doc])
+    await db_session.flush()
+
+    noise_chunks = [
+        Chunk(
+            id=uuid.uuid4(),
+            document_id=noise_doc.id,
+            org_id=tenant_a.org.id,
+            content=f"DBMS lecture note {i}: SQL systems can get details quickly in tables.",
+            embedding=embedding_service.embed_query(
+                f"DBMS lecture note {i}: SQL systems can get details quickly in tables."
+            ),
+            page_number=i + 1,
+            chunk_index=i,
+            section_title="DBMS Overview",
+            element_type="paragraph",
+            token_count=15,
+        )
+        for i in range(10)
+    ]
+    p1 = (
+        "Northwind Coffee Roasters is headquartered in Portland, Oregon and founded March 14, 2018."
+    )
+    p2 = (
+        "Return & Refund Policy: Unopened bags can be returned within 30 days of delivery for a full refund. "
+        "Opened bags qualify for a replacement or store credit within 14 days for quality issues."
+    )
+    policy_chunks = [
+        Chunk(
+            id=uuid.uuid4(),
+            document_id=policy_doc.id,
+            org_id=tenant_a.org.id,
+            content=p1,
+            embedding=embedding_service.embed_query(p1),
+            page_number=1,
+            chunk_index=0,
+            section_title="Company Facts",
+            element_type="paragraph",
+            token_count=20,
+        ),
+        Chunk(
+            id=uuid.uuid4(),
+            document_id=policy_doc.id,
+            org_id=tenant_a.org.id,
+            content=p2,
+            embedding=embedding_service.embed_query(p2),
+            page_number=2,
+            chunk_index=1,
+            section_title="Return & Refund Policy",
+            element_type="paragraph",
+            token_count=35,
+        ),
+    ]
+    db_session.add_all(noise_chunks + policy_chunks)
+    await db_session.commit()
+
+    engine = RetrievalEngine(db_session)
+
+    # 1. Scoped mode: must include ALL pages of Northwind_Policy.pdf and zero DBMS chunks
+    scoped_hits = await engine.retrieve(
+        question="Can I get a full refund on an opened bag of coffee?",
+        org_id=tenant_a.org.id,
+        document_ids=[policy_doc.id],
+    )
+    assert len(scoped_hits) == 2
+    assert all(h["document_id"] == str(policy_doc.id) for h in scoped_hits)
+    assert [h["page_number"] for h in scoped_hits] == [1, 2]
+
+    # 2. Workspace-wide mode: must STILL find the refund policy chunk (not drowned out by "can")
+    unscoped_hits = await engine.retrieve(
+        question="Can I get a full refund on an opened bag of coffee?",
+        org_id=tenant_a.org.id,
+    )
+    assert any(
+        h["document_id"] == str(policy_doc.id) and "unopened bags" in h["content"].lower()
+        for h in unscoped_hits
+    )
