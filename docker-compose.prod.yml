@@ -129,6 +129,7 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
         NEXT_PUBLIC_DEMO_MODE: ${NEXT_PUBLIC_DEMO_MODE:-false}
+        INTERNAL_API_URL: http://api:8000
     container_name: docintel-frontend-prod
     environment:
       - NODE_ENV=production
