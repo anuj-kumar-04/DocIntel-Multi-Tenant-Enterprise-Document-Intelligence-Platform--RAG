@@ -1,7 +1,9 @@
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEV_SECRET_PREFIX = "dev-docintel-"
 
 
 class Settings(BaseSettings):
@@ -18,6 +20,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ACCOUNT_LOCKOUT_MAX_ATTEMPTS: int = 5
+    ACCOUNT_LOCKOUT_SECONDS: int = 900
+    ENABLE_SWAGGER_IN_PROD: bool = False
 
     # Database
     DATABASE_URL: str = Field(
@@ -67,14 +72,27 @@ class Settings(BaseSettings):
     DEFAULT_MONTHLY_TOKEN_BUDGET: int = 1_000_000
     MAX_FILE_SIZE_BYTES: int = 50 * 1024 * 1024  # 50 MB
 
-    # Telemetry
-    LANGFUSE_PUBLIC_KEY: str = "pk-lf-docintel-demo"
-    LANGFUSE_SECRET_KEY: str = "sk-lf-docintel-demo"
-    LANGFUSE_HOST: str = "http://localhost:3001"
+    # Telemetry & Observability
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_BASE_URL: str = "https://us.cloud.langfuse.com"
+    LANGFUSE_HOST: str = "https://us.cloud.langfuse.com"
     PROMETHEUS_METRICS_ENABLED: bool = True
 
     # CORS
     FRONTEND_URL: str = "http://localhost:3000"
+
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        """Fail fast if insecure development defaults are left active in production."""
+        if self.ENVIRONMENT == "production":
+            if self.SECRET_KEY.startswith(_DEV_SECRET_PREFIX) or len(self.SECRET_KEY) < 32:
+                raise ValueError(
+                    "Production deployment requires a strong SECRET_KEY (>= 32 random chars)."
+                )
+            if self.DEBUG:
+                raise ValueError("DEBUG must be False in production.")
+        return self
 
 
 settings = Settings()

@@ -27,6 +27,16 @@ interface Member {
   created_at: string;
 }
 
+function generateTempPassword(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#";
+  if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
+    const arr = new Uint32Array(12);
+    window.crypto.getRandomValues(arr);
+    return Array.from(arr, (x) => chars[x % chars.length]).join("") + "9a!";
+  }
+  return "ChangeMe91!" + Math.random().toString(36).slice(2, 8);
+}
+
 export default function AdminPage() {
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
@@ -36,7 +46,7 @@ export default function AdminPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [inviteRole, setInviteRole] = useState("member");
-  const [invitePassword, setInvitePassword] = useState("TempPassword123!");
+  const [invitePassword, setInvitePassword] = useState("");
   const [lastInvitedCreds, setLastInvitedCreds] = useState<{ email: string; pass: string } | null>(null);
   const [inviteSuccess, setInviteSuccess] = useState(false);
 
@@ -68,7 +78,7 @@ export default function AdminPage() {
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const passToUse = invitePassword || "TempPassword123!";
+      const passToUse = invitePassword.trim() || generateTempPassword();
       await apiRequest("/api/v1/admin/members", {
         method: "POST",
         body: JSON.stringify({
@@ -82,7 +92,7 @@ export default function AdminPage() {
       setInviteSuccess(true);
       setInviteEmail("");
       setInviteName("");
-      setInvitePassword("TempPassword123!");
+      setInvitePassword("");
       loadAdminData();
       setTimeout(() => setInviteSuccess(false), 12000);
     } catch (err: any) {
@@ -298,13 +308,12 @@ export default function AdminPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-400">Temporary Password</label>
+                <label className="block text-xs font-medium text-slate-400">Temporary Password (optional)</label>
                 <input
                   type="text"
-                  required
                   value={invitePassword}
                   onChange={(e) => setInvitePassword(e.target.value)}
-                  placeholder="TempPassword123!"
+                  placeholder="Leave blank to auto-generate securely"
                   className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                 />
                 <span className="text-[10px] text-slate-500 mt-1 block">

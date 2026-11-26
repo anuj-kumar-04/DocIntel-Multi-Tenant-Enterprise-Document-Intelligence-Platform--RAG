@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from app.models.user import UserRole
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TenantUsageResponse(BaseModel):
@@ -31,3 +32,18 @@ class MemberResponse(BaseModel):
     is_active: bool
     created_at: datetime
     last_login_at: datetime | None = None
+
+
+class AuditLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    org_id: uuid.UUID | None = None
+    user_id: uuid.UUID | None = None
+    action: str
+    resource_type: str
+    resource_id: str | None = None
+    ip_address: str | None = None
+    status: str
+    details: dict[str, Any] | None = None
+    created_at: datetime

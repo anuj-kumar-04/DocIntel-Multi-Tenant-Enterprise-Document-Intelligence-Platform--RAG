@@ -3,15 +3,21 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { FileText, MessageSquare, Shield, LogOut, Cpu } from "lucide-react";
-import { clearStoredTokens } from "../lib/api";
+import { apiRequest, clearStoredTokens } from "../lib/api";
 
 export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
 
-  const handleLogout = () => {
-    clearStoredTokens();
-    router.push("/login");
+  const handleLogout = async () => {
+    try {
+      await apiRequest("/api/v1/auth/logout", { method: "POST" });
+    } catch {
+      // Proceed with local token cleanup even if session already expired
+    } finally {
+      clearStoredTokens();
+      router.push("/login");
+    }
   };
 
   const navLinks = [

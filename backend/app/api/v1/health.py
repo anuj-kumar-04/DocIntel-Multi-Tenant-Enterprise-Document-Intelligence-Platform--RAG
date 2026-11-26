@@ -1,5 +1,6 @@
 import redis.asyncio as aioredis
 from app.config import settings
+from app.core.logging import logger
 from app.deps import get_db
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
@@ -21,15 +22,16 @@ async def health_check():
 
 @router.get("/ready")
 async def readiness_check(db: AsyncSession = Depends(get_db)):
-    """Readiness probe checking database and Redis connectivity."""
-    checks = {"database": False, "redis": False}
+    """Readiness probe checking database and Redis connectivity without leaking internals."""
+    checks: dict[str, bool | str] = {"database": False, "redis": False}
 
     # Check PostgreSQL
     try:
         await db.execute(text("SELECT 1"))
         checks["database"] = True
     except Exception as e:
-        checks["database"] = f"unhealthy: {str(e)}"
+        logger.warning(f"Readiness PostgreSQL check failed: {e}")
+        checks["database"] = "unhealthy"
 
     # Check Redis
     try:
@@ -38,7 +40,8 @@ async def readiness_check(db: AsyncSession = Depends(get_db)):
         await r.aclose()
         checks["redis"] = True
     except Exception as e:
-        checks["redis"] = f"unhealthy: {str(e)}"
+        logger.warning(f"Readiness Redis check failed: {e}")
+        checks["redis"] = "unhealthy"
 
     all_ready = checks["database"] is True and checks["redis"] is True
     status_code = status.HTTP_200_OK if all_ready else status.HTTP_503_SERVICE_UNAVAILABLE

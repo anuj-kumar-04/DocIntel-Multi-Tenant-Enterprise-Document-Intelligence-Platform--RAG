@@ -5,15 +5,18 @@ import { useRouter } from "next/navigation";
 import { Cpu, Lock, Mail, Building, User, ArrowRight, Loader2, CheckCircle2 } from "lucide-react";
 import { apiRequest, setStoredTokens } from "../../../lib/api";
 
+const IS_DEMO_MODE =
+  process.env.NEXT_PUBLIC_DEMO_MODE === "true" || process.env.NODE_ENV === "development";
+
 export default function LoginPage() {
   const router = useRouter();
   const [isRegistering, setIsRegistering] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Form states
-  const [email, setEmail] = useState("admin@acme.com");
-  const [password, setPassword] = useState("Password123!");
+  // Form states (pre-filled only in dev/demo mode, empty in production)
+  const [email, setEmail] = useState(IS_DEMO_MODE ? "admin@acme.com" : "");
+  const [password, setPassword] = useState(IS_DEMO_MODE ? "Password123!" : "");
   const [fullName, setFullName] = useState("");
   const [orgName, setOrgName] = useState("");
 
@@ -183,30 +186,32 @@ export default function LoginPage() {
             </button>
           </div>
 
-          {/* Quick Demo Logins for Reviewers / Interviewers */}
-          <div className="mt-6 pt-4 border-t border-slate-800/80">
-            <p className="text-[11px] font-semibold text-slate-400 mb-2">
-              ⚡ Pre-seeded Demo Tenancy Accounts:
-            </p>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => setDemoCredentials("admin@acme.com", "Acme Corp")}
-                className="p-2 rounded-lg bg-slate-950 border border-slate-800 hover:border-blue-500/50 text-left transition"
-              >
-                <div className="font-semibold text-slate-200">Tenant A (Acme)</div>
-                <div className="text-[10px] text-slate-400">admin@acme.com</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => setDemoCredentials("admin@zephyr.com", "Zephyr")}
-                className="p-2 rounded-lg bg-slate-950 border border-slate-800 hover:border-purple-500/50 text-left transition"
-              >
-                <div className="font-semibold text-slate-200">Tenant B (Zephyr)</div>
-                <div className="text-[10px] text-slate-400">admin@zephyr.com</div>
-              </button>
+          {/* Quick Demo Logins (only shown in local dev or explicit demo mode) */}
+          {IS_DEMO_MODE && (
+            <div className="mt-6 pt-4 border-t border-slate-800/80">
+              <p className="text-[11px] font-semibold text-slate-400 mb-2">
+                ⚡ Pre-seeded Demo Tenancy Accounts:
+              </p>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setDemoCredentials("admin@acme.com", "Acme Corp")}
+                  className="p-2 rounded-lg bg-slate-950 border border-slate-800 hover:border-blue-500/50 text-left transition"
+                >
+                  <div className="font-semibold text-slate-200">Tenant A (Acme)</div>
+                  <div className="text-[10px] text-slate-400">admin@acme.com</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDemoCredentials("admin@zephyr.com", "Zephyr")}
+                  className="p-2 rounded-lg bg-slate-950 border border-slate-800 hover:border-purple-500/50 text-left transition"
+                >
+                  <div className="font-semibold text-slate-200">Tenant B (Zephyr)</div>
+                  <div className="text-[10px] text-slate-400">admin@zephyr.com</div>
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

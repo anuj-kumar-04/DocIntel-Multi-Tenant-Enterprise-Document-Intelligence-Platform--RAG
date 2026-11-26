@@ -7,10 +7,16 @@ from app.models.document import Document
 from app.models.org import Organization
 from app.models.usage import UsageEvent
 from app.models.user import User, UserRole
-from app.schemas.admin import MemberResponse, TenantUsageResponse, UpdateBudgetRequest
+from app.schemas.admin import (
+    AuditLogResponse,
+    MemberResponse,
+    TenantUsageResponse,
+    UpdateBudgetRequest,
+)
 from app.schemas.auth import MemberInviteRequest
+from app.services.audit import AuditService
 from app.services.auth_service import AuthService
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -100,20 +106,32 @@ async def get_tenant_usage(
 
 @router.patch("/budget", response_model=TenantUsageResponse)
 async def update_token_budget(
+    request: Request,
     req: UpdateBudgetRequest,
     current_user: User = Depends(require_role(UserRole.OWNER)),
     db: AsyncSession = Depends(get_db),
 ):
     """Update organization monthly token budget (Tenant Owner only)."""
     org = await db.get(Organization, current_user.org_id)
+    prev_budget = org.monthly_token_budget
     org.monthly_token_budget = req.monthly_token_budget
     await db.commit()
     await db.refresh(org)
+    await AuditService(db).log_event(
+        action="BUDGET_UPDATED",
+        resource_type="organization",
+        org_id=current_user.org_id,
+        user_id=current_user.id,
+        resource_id=str(current_user.org_id),
+        details={"previous_budget": prev_budget, "new_budget": req.monthly_token_budget},
+        request=request,
+    )
     return await get_tenant_usage(current_user, db)
 
 
 @router.post("/members", response_model=MemberResponse, status_code=status.HTTP_201_CREATED)
 async def invite_member(
+    request: Request,
     req: MemberInviteRequest,
     current_user: User = Depends(require_role(UserRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
@@ -121,6 +139,15 @@ async def invite_member(
     """Invite a new team member to the tenant organization."""
     auth_svc = AuthService(db)
     member = await auth_svc.invite_member(current_user, req)
+    await AuditService(db).log_event(
+        action="MEMBER_INVITED",
+        resource_type="user",
+        org_id=current_user.org_id,
+        user_id=current_user.id,
+        resource_id=str(member.id),
+        details={"invited_email": member.email, "role": member.role.value},
+        request=request,
+    )
     return member
 
 
@@ -136,6 +163,7 @@ async def list_members(
 
 @router.delete("/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_member(
+    request: Request,
     member_id: uuid.UUID,
     current_user: User = Depends(require_role(UserRole.ADMIN)),
     db: AsyncSession = Depends(get_db),
@@ -143,3 +171,21 @@ async def delete_member(
     """Remove a team member from the tenant organization."""
     auth_svc = AuthService(db)
     await auth_svc.delete_member(current_user, member_id)
+    await AuditService(db).log_event(
+        action="MEMBER_REMOVED",
+        resource_type="user",
+        org_id=current_user.org_id,
+        user_id=current_user.id,
+        resource_id=str(member_id),
+        request=request,
+    )
+
+
+@router.get("/audit-logs", response_model=list[AuditLogResponse])
+async def list_audit_logs(
+    limit: int = 100,
+    current_user: User = Depends(require_role(UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """List recent security audit events strictly for the current tenant organization."""
+    return await AuditService(db).list_org_logs(current_user.org_id, limit=limit)

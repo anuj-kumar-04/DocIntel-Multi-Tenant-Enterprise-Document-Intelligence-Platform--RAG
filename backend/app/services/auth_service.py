@@ -1,14 +1,23 @@
 import re
+import secrets
+import time
 import uuid
 from datetime import UTC, datetime
 
 from app.config import settings
 from app.core.errors import AuthenticationFailedError, DocIntelException
 from app.core.security import (
+    clear_failed_logins,
     create_access_token,
     create_refresh_token,
     decode_token,
     get_password_hash,
+    is_login_locked,
+    is_token_jti_revoked,
+    is_user_token_revoked,
+    record_failed_login,
+    revoke_all_user_tokens,
+    revoke_token_jti,
     verify_password,
 )
 from app.models.org import Organization
@@ -37,14 +46,12 @@ class AuthService:
 
     async def register_org_and_owner(self, req: UserRegisterRequest) -> tuple[User, TokenResponse]:
         """Atomically create an organization and its primary owner user."""
-        # Check if email is already taken
         user_check = await self.db.execute(select(User).where(User.email == req.email.lower()))
         if user_check.scalars().first():
             raise DocIntelException(
                 "A user with this email address already exists", status_code=409
             )
 
-        # Generate unique slug for organization
         base_slug = req.org_slug if req.org_slug else slugify(req.org_name)
         slug = base_slug
         counter = 1
@@ -57,7 +64,6 @@ class AuthService:
             slug = f"{base_slug}-{counter}"
             counter += 1
 
-        # Create Organization
         org = Organization(
             name=req.org_name,
             slug=slug,
@@ -68,7 +74,6 @@ class AuthService:
         self.db.add(org)
         await self.db.flush()
 
-        # Create Owner User
         user = User(
             org_id=org.id,
             email=req.email.lower(),
@@ -83,7 +88,6 @@ class AuthService:
         await self.db.refresh(user)
         await self.db.refresh(org)
 
-        # Generate JWT Tokens
         access_token = create_access_token(user.id, org.id, user.role.value)
         refresh_token = create_refresh_token(user.id, org.id)
 
@@ -96,22 +100,30 @@ class AuthService:
         return user, tokens
 
     async def authenticate_user(self, req: UserLoginRequest) -> tuple[User, TokenResponse]:
-        """Verify user credentials and return new JWT tokens."""
+        """Verify user credentials with brute-force lockout protection and issue JWT tokens."""
+        normalized_email = req.email.lower()
+        if await is_login_locked(normalized_email):
+            raise DocIntelException(
+                "Too many failed login attempts. Account temporarily locked; please try again later.",
+                status_code=429,
+            )
+
         stmt = (
             select(User)
-            .where(User.email == req.email.lower())
+            .where(User.email == normalized_email)
             .options(selectinload(User.organization))
         )
         result = await self.db.execute(stmt)
         user = result.scalars().first()
 
         if not user or not verify_password(req.password, user.hashed_password):
+            await record_failed_login(normalized_email)
             raise AuthenticationFailedError("Invalid email or password")
 
         if not user.is_active:
             raise AuthenticationFailedError("Account has been disabled. Please contact your admin.")
 
-        # Update last login timestamp
+        await clear_failed_logins(normalized_email)
         user.last_login_at = datetime.now(UTC)
         await self.db.commit()
         await self.db.refresh(user)
@@ -127,14 +139,21 @@ class AuthService:
         return user, tokens
 
     async def refresh_user_token(self, refresh_token: str) -> TokenResponse:
-        """Validate refresh token and issue a fresh access token."""
+        """Validate refresh token, rotate JTI to prevent replay, and issue fresh tokens."""
         try:
             payload = decode_token(refresh_token)
             if payload.get("type") != "refresh":
                 raise AuthenticationFailedError("Invalid token type")
             user_id = uuid.UUID(payload.get("sub"))
+            jti = payload.get("jti")
+            iat = payload.get("iat")
+            iat_ms = payload.get("iat_ms")
+            exp = payload.get("exp")
         except Exception:
             raise AuthenticationFailedError("Invalid or expired refresh token") from None
+
+        if await is_token_jti_revoked(jti) or await is_user_token_revoked(user_id, iat, iat_ms):
+            raise AuthenticationFailedError("Refresh token has been revoked")
 
         stmt = select(User).where(User.id == user_id)
         result = await self.db.execute(stmt)
@@ -142,6 +161,11 @@ class AuthService:
 
         if not user or not user.is_active:
             raise AuthenticationFailedError("User no longer exists or is inactive")
+
+        # Rotate consumed refresh token to prevent replay
+        if jti and exp:
+            remaining_ttl = max(1, int(exp) - int(time.time()))
+            await revoke_token_jti(jti, remaining_ttl)
 
         new_access_token = create_access_token(user.id, user.org_id, user.role.value)
         new_refresh_token = create_refresh_token(user.id, user.org_id)
@@ -153,17 +177,27 @@ class AuthService:
         )
 
     async def invite_member(self, inviter: User, req: MemberInviteRequest) -> User:
-        """Invite/create a member belonging to inviter's organization."""
+        """Invite/create a member belonging to inviter's organization with privilege guards."""
+        if req.role == UserRole.OWNER:
+            raise DocIntelException(
+                "Cannot assign Owner role via team invitation.", status_code=403
+            )
+        if inviter.role == UserRole.ADMIN and req.role == UserRole.ADMIN:
+            raise DocIntelException(
+                "Only organization owners can invite administrators.", status_code=403
+            )
+
         existing = await self.db.execute(select(User).where(User.email == req.email.lower()))
         if existing.scalars().first():
             raise DocIntelException(
                 "A user with this email address already exists", status_code=409
             )
 
+        raw_password = req.password or f"{secrets.token_urlsafe(12)}A1!"
         member = User(
             org_id=inviter.org_id,
             email=req.email.lower(),
-            hashed_password=get_password_hash(req.password),
+            hashed_password=get_password_hash(raw_password),
             full_name=req.full_name,
             role=req.role,
             is_active=True,
@@ -180,7 +214,7 @@ class AuthService:
         return list(result.scalars().all())
 
     async def delete_member(self, current_user: User, member_id: uuid.UUID) -> None:
-        """Remove a member from the organization with RBAC and safety checks."""
+        """Remove a member from the organization with RBAC checks and instant session revocation."""
         if current_user.id == member_id:
             raise DocIntelException(
                 "You cannot remove your own account from the organization management console.",
@@ -202,5 +236,7 @@ class AuthService:
                 "Administrators cannot remove other administrators.", status_code=403
             )
 
+        deleted_id = target_member.id
         await self.db.delete(target_member)
         await self.db.commit()
+        await revoke_all_user_tokens(deleted_id)

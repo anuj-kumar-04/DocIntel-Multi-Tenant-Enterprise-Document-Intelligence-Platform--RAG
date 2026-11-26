@@ -53,6 +53,15 @@ class StorageService:
         except Exception as e:
             logger.warning(f"Storage connection notice: {e}")
 
+    def _resolve_local_path(self, s3_key: str) -> str:
+        """Resolve local fallback path while guarding against directory traversal."""
+        base_dir = os.path.realpath(self.local_storage_dir)
+        clean_key = s3_key.lstrip("/\\")
+        candidate = os.path.realpath(os.path.join(base_dir, clean_key))
+        if not candidate.startswith(base_dir + os.sep):
+            raise ValueError("Invalid storage object key: path traversal blocked.")
+        return candidate
+
     def upload_file(self, file_obj: BinaryIO, s3_key: str, content_type: str) -> str:
         """Upload a file-like object to S3/SeaweedFS with local fallback."""
         try:
@@ -75,7 +84,7 @@ class StorageService:
                 logger.warning(f"S3 upload notice ({e}); writing to persistent local storage.")
 
         # Local fallback
-        local_path = os.path.join(self.local_storage_dir, s3_key)
+        local_path = self._resolve_local_path(s3_key)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(local_path, "wb") as f:
             f.write(raw_bytes)
@@ -92,7 +101,7 @@ class StorageService:
             except Exception as e:
                 logger.warning(f"S3 download notice ({e}); attempting local storage read.")
 
-        local_path = os.path.join(self.local_storage_dir, s3_key)
+        local_path = self._resolve_local_path(s3_key)
         if os.path.exists(local_path):
             with open(local_path, "rb") as f:
                 return f.read()
@@ -106,7 +115,7 @@ class StorageService:
                 self._client.delete_object(Bucket=self.bucket_name, Key=s3_key)
             except Exception as e:
                 logger.warning(f"Failed to delete S3 object '{s3_key}': {e}")
-        local_path = os.path.join(self.local_storage_dir, s3_key)
+        local_path = self._resolve_local_path(s3_key)
         if os.path.exists(local_path):
             try:
                 os.remove(local_path)

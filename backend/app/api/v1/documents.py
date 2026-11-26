@@ -1,6 +1,9 @@
 import hashlib
 import io
+import os
+import re
 import uuid
+import zipfile
 
 from app.config import settings
 from app.core.errors import ResourceNotFoundError
@@ -14,6 +17,7 @@ from app.schemas.document import (
     DocumentStatusResponse,
     DocumentUploadResponse,
 )
+from app.services.audit import AuditService
 from app.services.storage import storage_service
 from app.workers.tasks import ingest_document, process_document_pipeline
 from fastapi import (
@@ -22,6 +26,7 @@ from fastapi import (
     Depends,
     File,
     HTTPException,
+    Request,
     UploadFile,
     status,
 )
@@ -41,15 +46,83 @@ ALLOWED_MIME_TYPES = {
     "text/markdown": ".md",
 }
 
+ALLOWED_EXTENSIONS = set(ALLOWED_MIME_TYPES.values())
+_MAX_ZIP_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # 100 MB decompression bomb guard
+
+
+def sanitize_filename(raw_name: str | None) -> str:
+    """Strip path segments and unsafe characters from uploaded filenames."""
+    base = os.path.basename((raw_name or "uploaded_file").replace("\\", "/"))
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", base).strip("._")
+    return cleaned[:200] or "uploaded_file"
+
+
+def validate_uploaded_file(filename: str, content_type: str | None, content: bytes) -> str:
+    """Validate extension, MIME type, binary magic bytes, and zip-bomb thresholds."""
+    _, ext = os.path.splitext(filename.lower())
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported file extension '{ext or 'none'}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
+
+    mime = (content_type or "application/octet-stream").split(";")[0].strip().lower()
+    if mime != "application/octet-stream" and mime not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported media type '{mime}'.",
+        )
+
+    if ext == ".pdf":
+        if not content.lstrip().startswith(b"%PDF-"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File content does not match PDF signature.",
+            )
+    elif ext in {".docx", ".xlsx"}:
+        if not content.startswith(b"PK\x03\x04"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File content does not match valid {ext.upper()} archive signature.",
+            )
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                total_uncompressed = sum(info.file_size for info in zf.infolist())
+                if total_uncompressed > _MAX_ZIP_UNCOMPRESSED_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Decompressed document archive exceeds safety limit.",
+                    )
+        except zipfile.BadZipFile:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Corrupted or malformed {ext.upper()} archive.",
+            ) from None
+    elif ext in {".doc", ".xls"}:
+        if not content.startswith(b"\xd0\xcf\x11\xe0"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File content does not match legacy {ext.upper()} signature.",
+            )
+    elif ext in {".txt", ".md"}:
+        if b"\x00" in content[:4096]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Binary payload rejected for plain-text document.",
+            )
+
+    return mime if mime in ALLOWED_MIME_TYPES else "application/octet-stream"
+
 
 @router.post("", response_model=DocumentUploadResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a document, stream to object storage, and enqueue background ingestion."""
+    """Upload a document, validate signature, stream to S3, and enqueue ingestion."""
     # 1. Read file bytes and validate size
     content = await file.read()
     file_size = len(content)
@@ -64,6 +137,9 @@ async def upload_document(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty",
         )
+
+    safe_filename = sanitize_filename(file.filename)
+    validated_mime = validate_uploaded_file(safe_filename, file.content_type, content)
 
     # 2. Compute SHA-256 hash for idempotency checking
     content_hash = hashlib.sha256(content).hexdigest()
@@ -87,13 +163,13 @@ async def upload_document(
             is_duplicate=True,
         )
 
-    # 3. Stream to S3 / MinIO
+    # 3. Stream to S3 / MinIO with sanitized key
     doc_id = uuid.uuid4()
-    s3_key = f"org_{current_user.org_id}/{doc_id}_{file.filename}"
+    s3_key = f"org_{current_user.org_id}/{doc_id}_{safe_filename}"
     storage_service.upload_file(
         io.BytesIO(content),
         s3_key=s3_key,
-        content_type=file.content_type or "application/octet-stream",
+        content_type=validated_mime,
     )
 
     # 4. Insert row in database
@@ -101,9 +177,9 @@ async def upload_document(
         id=doc_id,
         org_id=current_user.org_id,
         uploaded_by=current_user.id,
-        filename=file.filename or "uploaded_file",
+        filename=safe_filename,
         s3_key=s3_key,
-        mime_type=file.content_type or "application/octet-stream",
+        mime_type=validated_mime,
         size_bytes=file_size,
         status=DocumentStatus.QUEUED,
         content_hash=content_hash,
@@ -111,6 +187,16 @@ async def upload_document(
     db.add(document)
     await db.commit()
     await db.refresh(document)
+
+    await AuditService(db).log_event(
+        action="DOCUMENT_UPLOADED",
+        resource_type="document",
+        org_id=current_user.org_id,
+        user_id=current_user.id,
+        resource_id=str(document.id),
+        details={"filename": safe_filename, "size_bytes": file_size},
+        request=request,
+    )
 
     # 5. Dispatch background task: Celery primary, FastAPI background task fallback
     enqueued_celery = False
@@ -123,7 +209,16 @@ async def upload_document(
         )
 
     if not enqueued_celery:
-        background_tasks.add_task(process_document_pipeline, str(document.id))
+
+        async def _safe_background_ingest(doc_id_str: str) -> None:
+            try:
+                await process_document_pipeline(doc_id_str)
+            except Exception as bg_exc:
+                logger.warning(
+                    f"Background ingestion ended with handled error for {doc_id_str}: {bg_exc}"
+                )
+
+        background_tasks.add_task(_safe_background_ingest, str(document.id))
 
     return DocumentUploadResponse(
         document_id=document.id,
@@ -201,6 +296,7 @@ async def get_document_detail(
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(
+    request: Request,
     document_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -215,10 +311,21 @@ async def delete_document(
     if not doc:
         raise ResourceNotFoundError("Document", str(document_id))
 
+    filename = doc.filename
     # Delete from S3 storage
     storage_service.delete_file(doc.s3_key)
 
     # Delete from database (cascades to chunks)
     await db.delete(doc)
     await db.commit()
+
+    await AuditService(db).log_event(
+        action="DOCUMENT_DELETED",
+        resource_type="document",
+        org_id=current_user.org_id,
+        user_id=current_user.id,
+        resource_id=str(document_id),
+        details={"filename": filename},
+        request=request,
+    )
     return None

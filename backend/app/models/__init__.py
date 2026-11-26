@@ -1,3 +1,4 @@
+from app.models.audit import AuditLog
 from app.models.base import Base, TimestampMixin
 from app.models.chat import Conversation, Message, MessageRole
 from app.models.chunk import Chunk
@@ -7,6 +8,7 @@ from app.models.usage import UsageEvent
 from app.models.user import User, UserRole
 
 __all__ = [
+    "AuditLog",
     "Base",
     "TimestampMixin",
     "Organization",

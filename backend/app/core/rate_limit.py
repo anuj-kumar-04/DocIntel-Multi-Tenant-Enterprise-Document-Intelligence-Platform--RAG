@@ -19,4 +19,5 @@ limiter = Limiter(
     default_limits=["120/minute"],
     storage_uri=settings.REDIS_URL,
     enabled=settings.ENVIRONMENT != "test",
+    swallow_errors=True,
 )
