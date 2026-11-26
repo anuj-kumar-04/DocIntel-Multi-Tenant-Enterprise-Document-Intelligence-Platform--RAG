@@ -26,7 +26,7 @@ gcloud compute ssh docintel-prod --zone=us-central1-a
 ```
 Clone the repository:
 ```bash
-git clone <YOUR_GITHUB_REPO_URL> docintel
+git clone https://github.com/anuj-kumar-04/DocIntel-Multi-Tenant-Enterprise-Document-Intelligence-Platform--RAG.git docintel
 cd docintel
 ```
 
