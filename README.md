@@ -140,7 +140,7 @@
 ├── ARCHITECTURE.md              # Architectural Decision Records (ADRs) & Interview Script
 ├── EVALUATION.md                # Retrieval & generation benchmark analysis
 ├── PROJECT_EXPLAINED.md         # Deep-dive system walkthrough
-├── Project1_Blueprint_DocIntel (1).md # Full architectural blueprint (synced to codebase)
+├── Project1_Blueprint_DocIntel.md     # Full architectural blueprint (synced to codebase)
 ├── Project 1 blueprint.docx     # Formatted Microsoft Word blueprint export
 ├── docker-compose.yml           # 8-container local development & observability stack
 ├── docker-compose.prod.yml      # 7-container hardened production stack (+ Nginx, - dev ports)

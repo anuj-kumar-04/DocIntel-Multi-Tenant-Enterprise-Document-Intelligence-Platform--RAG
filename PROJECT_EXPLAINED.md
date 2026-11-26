@@ -84,7 +84,7 @@ Enterprise teams store critical records across siloed financial filings, contrac
 ├── ARCHITECTURE.md              # Architecture Decision Records (ADRs)
 ├── EVALUATION.md                # Evaluation metrics & comparative analysis
 ├── README.md                    # Main repository guide
-├── Project1_Blueprint_DocIntel (1).md # Synced architectural blueprint
+├── Project1_Blueprint_DocIntel.md     # Synced architectural blueprint
 ├── Project 1 blueprint.docx     # Formatted Microsoft Word blueprint
 ├── docker-compose.yml           # 8-container local development stack
 └── docker-compose.prod.yml      # 7-container hardened production stack
