@@ -134,6 +134,11 @@ class LayoutChunker:
             buffer_tokens = 0
 
         for block in blocks:
+            # Flush when moving to a new page so native + OCR blocks merge per page with accurate citations
+            if block.page_number != current_page:
+                flush_buffer()
+                current_page = block.page_number
+
             # 1. Tables are preserved whole as distinct chunks to prevent splitting tabular data
             if block.element_type == "table":
                 flush_buffer()
@@ -162,7 +167,7 @@ class LayoutChunker:
                 buffer_tokens += self.count_tokens(block.content)
                 continue
 
-            # 3. Paragraph text
+            # 3. Paragraph / OCR text
             block_tokens = self.count_tokens(block.content)
             current_page = block.page_number
             if block.section_title:

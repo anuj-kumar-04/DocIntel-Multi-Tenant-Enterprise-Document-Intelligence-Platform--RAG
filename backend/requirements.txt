@@ -33,10 +33,14 @@ numpy>=1.26.0
 # sentence-transformers>=2.6.0  # Optional: deterministic normalized vector fallback and LiteLLM are used
 tiktoken>=0.6.0
 
-# Document Parsing
+# Document Parsing & OCR
 PyMuPDF>=1.24.0
 python-docx>=1.1.0
 openpyxl>=3.1.2
+rapidocr>=2.0.0
+onnxruntime>=1.17.0
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0
 
 # Monitoring, Tracing & Metrics
 prometheus-fastapi-instrumentator>=7.0.0
