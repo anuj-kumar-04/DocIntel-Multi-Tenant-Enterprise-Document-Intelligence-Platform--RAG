@@ -1,6 +1,6 @@
 # DocIntel — Multi-Tenant Enterprise Document Intelligence Platform
 
-> **Production-grade RAG platform serving cited, page-level answers over enterprise documents with JWT auth, role-based access control, SQL-enforced multi-tenancy, and published RAGAS evaluation numbers.**
+> **Production-grade, security-hardened RAG platform serving cited, page-level answers over enterprise documents with JWT token rotation/revocation, RBAC, PostgreSQL + pgvector hybrid retrieval, Langfuse v4 tracing, per-tenant cost controls, and automated CI quality gates.**
 
 [![CI / CD Pipeline](https://github.com/anuj-kumar-04/DocIntel-Multi-Tenant-Enterprise-Document-Intelligence-Platform--RAG/actions/workflows/ci.yml/badge.svg)](https://github.com/anuj-kumar-04/DocIntel-Multi-Tenant-Enterprise-Document-Intelligence-Platform--RAG/actions/workflows/ci.yml)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
@@ -13,46 +13,47 @@
 
 ## 1. System Architecture
 
-```
+```text
                              ┌──────────────────────────┐
                              │  Next.js 15 Frontend     │
-                             │  (TS, Tailwind, shadcn)  │
-                             │  streaming chat + upload │
+                             │ (React 19, TS, Tailwind) │
+                             │ streaming chat + upload  │
                              └────────────┬─────────────┘
                                           │ HTTPS / SSE
                              ┌────────────▼─────────────┐
-                             │        Nginx             │
-                             │  TLS, routing, gzip      │
+                             │     Nginx (Prod Proxy)   │
+                             │ TLS, auth rate limit,    │
+                             │ headers, gzip, SSE proxy │
                              └────────────┬─────────────┘
                                           │
          ┌────────────────────────────────▼────────────────────────────────┐
          │                    FastAPI (Async Python 3.12)                  │
          │  /auth  /documents  /chat  /admin  /health  /metrics            │
-         │  JWT middleware · RBAC · rate limit · request-id logging        │
+         │  JWT JTI revocation · RBAC · SlowAPI · Security headers · Audit │
          └───┬──────────────┬───────────────┬──────────────┬───────────────┘
              │              │               │              │
-             │ enqueue      │ read/write    │ retrieve     │ LLM call
+             │ enqueue      │ read/write    │ retrieve     │ LLM call + PII mask
              ▼              ▼               ▼              ▼
      ┌────────────┐  ┌────────────┐  ┌─────────────┐  ┌──────────────┐
-     │   Redis    │  │ PostgreSQL │  │  pgvector    │  │  LiteLLM     │
-     │ queue +    │  │ users,orgs │  │  embeddings  │  │  router      │
-     │ sem. cache │  │ docs,chats │  │  + BM25 (tsv)│  │ Groq/OpenAI/ │
-     └─────┬──────┘  └────────────┘  └─────────────┘  │ Gemini +     │
-           │                                           │ fallback     │
-           ▼                                           └──────┬───────┘
-    ┌──────────────────────────┐                              │
-    │   Celery Workers         │                        ┌─────▼──────┐
-    │ 1. download from S3      │                        │  Langfuse  │
-    │ 2. parse layout & tables │                        │  tracing   │
-    │ 3. chunk (layout-aware)  │                        └────────────┘
-    │ 4. embed in batches      │
-    │ 5. upsert to pgvector    │                        ┌────────────┐
-    │ 6. resilient storage     │                        │ Prometheus │
-    └──────────┬───────────────┘                        │ + Grafana  │
-               │                                        └────────────┘
+     │   Redis    │  │ PostgreSQL │  │  pgvector   │  │   LiteLLM    │
+     │ queue +    │  │ users,orgs │  │ embeddings  │  │   router     │
+     │ sem. cache │  │ docs,chats │  │ + BM25 (tsv)│  │ Groq/Gemini/ │
+     │ + lockout  │  │ + auditlog │  │ + RLS ctx   │  │ OpenAI+local │
+     └─────┬──────┘  └────────────┘  └─────────────┘  └──────┬───────┘
+           │                                                 │
+           ▼                                           ┌─────▼──────┐
+    ┌──────────────────────────┐                       │ Langfuse v4│
+    │   Celery Workers         │                       │ OTel trace │
+    │ 1. download from S3      │                       └────────────┘
+    │ 2. parse layout & tables │
+    │ 3. chunk (layout-aware)  │                       ┌────────────┐
+    │ 4. embed (bge-small 384d)│                       │ Prometheus │
+    │ 5. upsert to pgvector    │                       │ + Grafana  │
+    └──────────┬───────────────┘                       └────────────┘
+               │
                ▼
        ┌───────────────┐
-       │  S3 / MinIO   │  raw file storage (with local fallback)
+       │ S3 / SeaweedFS│  raw file storage (or GCS HMAC S3 in GCP prod)
        └───────────────┘
 ```
 
@@ -60,186 +61,181 @@
 
 ## 2. Repository & Project Directory Structure
 
-```
-├── .github/
-│   └── workflows/
-│       └── ci.yml               # Production CI/CD pipeline (Ruff, Pytest, Docker, RAGAS Gate)
+```text
+├── .agents/skills/langfuse/     # Installed Langfuse AI observability & eval skill
+├── .github/workflows/ci.yml     # CI/CD: Ruff, Pytest (34 tests), Docker builds, Eval Gate
 ├── backend/
 │   ├── alembic/                 # Database migrations (PostgreSQL + pgvector schema)
 │   ├── app/
 │   │   ├── api/v1/              # FastAPI REST endpoints & route controllers
-│   │   │   ├── admin.py         # Tenant management & organization metrics
-│   │   │   ├── auth.py          # JWT login, registration & user profiling
-│   │   │   ├── chat.py          # SSE token streaming & conversational RAG endpoint
-│   │   │   ├── documents.py     # Multi-format document upload & status tracking
-│   │   │   ├── health.py        # Kubernetes liveness & readiness health checks
-│   │   │   └── router.py        # Centralized API v1 route aggregator
-│   │   ├── core/                # System infrastructure & middleware
-│   │   │   ├── errors.py        # Standardized enterprise HTTP exceptions
+│   │   │   ├── admin.py         # Tenant usage, budgets, member invites/removal, audit logs
+│   │   │   ├── auth.py          # JWT register, login, refresh rotation, logout & /me
+│   │   │   ├── chat.py          # SSE token streaming, BOLA checks & conversational RAG
+│   │   │   ├── documents.py     # Magic-byte validated upload, status tracking & delete
+│   │   │   ├── health.py        # Liveness & leak-free readiness probes
+│   │   │   └── router.py        # Centralized API v1 router aggregator
+│   │   ├── core/                # System infrastructure & security controls
+│   │   │   ├── errors.py        # Standardized HTTP domain exceptions
 │   │   │   ├── logging.py       # Structured JSON request-ID logging
-│   │   │   ├── rate_limit.py    # IP/User-based rate limiting (SlowAPI)
-│   │   │   ├── security.py      # BCrypt password hashing & JWT token management
-│   │   │   └── tracing.py       # Langfuse distributed tracing & span management
-│   │   ├── models/              # SQLAlchemy 2.0 async database models
-│   │   │   ├── base.py          # Declarative Base metadata
-│   │   │   ├── chat.py          # ChatSession and ChatMessage entities
-│   │   │   ├── chunk.py         # Document chunks with pgvector embeddings & BM25 tsv
-│   │   │   ├── document.py      # Document metadata, processing statuses & SHA-256 hashes
+│   │   │   ├── rate_limit.py    # Tenant/IP SlowAPI rate limiting (Redis-backed)
+│   │   │   ├── security.py      # BCrypt hashing, JWT JTI revocation & login lockout
+│   │   │   └── tracing.py       # Langfuse v4 OpenTelemetry tracing & span hierarchy
+│   │   ├── models/              # SQLAlchemy 2.0 async ORM models
+│   │   │   ├── audit.py         # Immutable tenant security AuditLog table
+│   │   │   ├── base.py          # Declarative Base metadata & UTC TimestampMixin
+│   │   │   ├── chat.py          # Conversation and Message entities
+│   │   │   ├── chunk.py         # Document chunks (Vector(384) HNSW + TSVECTOR GIN)
+│   │   │   ├── document.py      # Document metadata, processing status & SHA-256 hashes
 │   │   │   ├── org.py           # Multi-tenant organizations & monthly token quotas
-│   │   │   ├── usage.py         # Token usage audit logs & event history
+│   │   │   ├── usage.py         # Token usage & dollar spend audit history
 │   │   │   └── user.py          # User accounts and RBAC roles (Owner/Admin/Member)
-│   │   ├── schemas/             # Pydantic v2 validation models & DTOs
-│   │   │   ├── admin.py         # Tenant governance & usage response schemas
-│   │   │   ├── auth.py          # Auth requests, user responses & token schemas
-│   │   │   ├── chat.py          # Chat message inputs, citations & streaming schemas
-│   │   │   └── document.py      # Document upload & listing schemas
-│   │   ├── scripts/             # Operational utility scripts
-│   │   │   ├── reindex_embeddings.py # Vector embedding backfill & migration utility
-│   │   │   └── seed.py          # Seeds demo organizations, users & realistic documents
-│   │   ├── services/            # Core business & algorithmic intelligence
-│   │   │   ├── auth_service.py  # User authentication & permission checks
+│   │   ├── schemas/             # Pydantic v2 validation DTOs (strict email/password checks)
+│   │   ├── scripts/             # reindex_embeddings.py & seed.py operational scripts
+│   │   ├── services/            # Core business, RAG & security services
+│   │   │   ├── audit.py         # Security audit logging & querying service
+│   │   │   ├── auth_service.py  # Auth, RBAC privilege guards, lockout & offboarding
 │   │   │   ├── budget.py        # Monthly quota governance & atomic token tracking
-│   │   │   ├── cache.py         # Redis semantic vector cache (>0.97 similarity)
+│   │   │   ├── cache.py         # Tenant-isolated Redis semantic cache (>0.97 cosine)
 │   │   │   ├── chunking.py      # LayoutChunker (section-aware, table preservation)
-│   │   │   ├── embeddings.py    # Embedding generator with batching & normalized fallbacks
-│   │   │   ├── generation.py    # LLM cascade router & citation verification engine
-│   │   │   ├── parsing.py       # PyMuPDF / docx / openpyxl layout parser + unicode sanitizer
+│   │   │   ├── embeddings.py    # fastembed / SentenceTransformer (384d) + fallback
+│   │   │   ├── generation.py    # LiteLLM cascade router, XML fencing & citation verifier
+│   │   │   ├── guardrails.py    # Prompt-injection detection & Luhn/PII redaction
+│   │   │   ├── parsing.py       # PyMuPDF / python-docx / openpyxl layout parser
 │   │   │   ├── retrieval.py     # Hybrid search (pgvector + BM25 + RRF + Cross-Encoder)
-│   │   │   └── storage.py       # S3 / SeaweedFS / MinIO storage with resilient local fallback
-│   │   ├── static/              # Standalone embedded executive web interface
-│   │   │   └── index.html       # Zero-dependency, modern responsive browser UI
-│   │   ├── workers/             # Asynchronous background task workers
-│   │   │   ├── celery_app.py    # Celery instance configuration with Redis broker
-│   │   │   └── tasks.py         # Document parsing, chunking & vector indexing pipeline
-│   │   ├── config.py            # Pydantic BaseSettings environment configuration
-│   │   ├── deps.py              # FastAPI dependency injection (AsyncSession, User, DB)
-│   │   └── main.py              # Application lifespan, CORS, Prometheus instrumentation
-│   ├── tests/                   # Pytest test suite (24 automated tests, 100% passing)
-│   │   ├── conftest.py          # Async PostgreSQL test engine, client & tenant fixtures
-│   │   ├── test_auth.py         # Auth, registration, and RBAC tests
-│   │   ├── test_chat.py         # Chat endpoints, streaming & quota enforcement
-│   │   ├── test_citations.py    # Citation extraction, validation & hallucination stripping
-│   │   ├── test_ingestion.py    # File upload, idempotency, chunking & layout tests
-│   │   ├── test_retrieval.py    # Hybrid search, BM25, RRF fusion & semantic cache
-│   │   └── test_tenant_isolation.py # Cryptographic zero-leak cross-tenant query tests
-│   ├── Dockerfile               # Production multi-stage backend container
-│   ├── pyproject.toml           # Ruff, Mypy & Pytest tooling configuration
-│   └── requirements.txt         # Pinned backend dependencies
-├── frontend/                    # Next.js 15 enterprise web application
-│   ├── app/                     # App router pages, layouts & providers
-│   ├── components/              # React components (ChatDrawer, FileUploader, CitationCard)
-│   ├── lib/                     # API client, SSE stream parsers & auth utilities
-│   ├── public/                  # Static assets & icons
-│   ├── Dockerfile               # Node.js 20 production container
-│   ├── package.json             # Frontend dependencies (React 19, Tailwind, shadcn)
-│   └── tailwind.config.js       # Styling theme configuration
-├── eval/                        # RAGAS Golden Evaluation Suite
-│   ├── golden_set.jsonl         # 50 hand-crafted enterprise questions with ground truth
-│   └── run_eval.py              # Benchmark execution harness & CI quality regression gate
-├── infra/                       # Infrastructure & Observability
-│   ├── grafana/                 # Dashboards for token latency, queries & cache hit rate
-│   ├── nginx/                   # Nginx reverse proxy configuration & gzip compression
-│   └── prometheus/              # Metrics collection rules for FastAPI & Celery
-├── ARCHITECTURE.md              # Architectural Decision Records (ADRs) & Interview Guide
-├── EVALUATION.md                # In-depth RAGAS benchmark methodology & metric definitions
-├── PROJECT_EXPLAINED.md         # Comprehensive end-to-end platform explanation & guide
-├── docker-compose.yml           # Complete 7-container local orchestration stack
-├── docker-compose.prod.yml      # Hardened production Docker Compose deployment
-└── Makefile                     # Developer productivity shortcuts (test, lint, run, seed)
+│   │   │   └── storage.py       # S3 / SeaweedFS storage with traversal-guarded local fallback
+│   │   ├── static/index.html    # Standalone embedded browser UI (non-production)
+│   │   ├── workers/             # Celery worker app & async document ingestion tasks
+│   │   ├── config.py            # Production-validated Pydantic BaseSettings
+│   │   ├── deps.py              # AsyncSession, JWT revocation check & Postgres RLS context
+│   │   └── main.py              # App factory, security headers, CORS, SlowAPI & Prometheus
+│   ├── tests/                   # 34 automated pytest tests across 7 test suites
+│   │   ├── conftest.py          # Async PostgreSQL test engine & dual-tenant fixtures
+│   │   ├── test_auth.py         # Auth, registration, RBAC & member offboarding tests (8)
+│   │   ├── test_chat.py         # Chat endpoints, SSE streaming & budget enforcement (3)
+│   │   ├── test_citations.py    # Citation extraction & hallucination stripping (4)
+│   │   ├── test_ingestion.py    # Upload, idempotency, chunking & layout tests (4)
+│   │   ├── test_retrieval.py    # Hybrid search, BM25, RRF fusion & semantic cache (5)
+│   │   ├── test_security.py     # Headers, magic bytes, BOLA, lockout, guardrails & audit (9)
+│   │   └── test_tenant_isolation.py # Zero-leak cross-tenant query isolation test (1)
+│   ├── Dockerfile               # Production multi-stage non-root backend container
+│   ├── pyproject.toml           # Ruff, Mypy & Pytest configuration
+│   └── requirements.txt         # Backend Python dependencies
+├── frontend/                    # Next.js 15 / React 19 Enterprise Web Application
+│   ├── app/                     # App Router pages ((auth)/login, (app)/chat, documents, admin)
+│   ├── components/              # Navbar, ChatStream, CitationCard, UploadDropzone
+│   ├── lib/                     # api.ts & useSSE.ts (relative/same-origin Nginx ready)
+│   ├── Dockerfile               # Node.js 20 Alpine multi-stage build (with NEXT_PUBLIC args)
+│   └── package.json             # Next.js 15, React 19, Tailwind CSS, lucide-react
+├── eval/                        # Golden Benchmark Evaluation Suite
+│   ├── golden_set.jsonl         # 50 enterprise benchmark questions with expected pages
+│   └── run_eval.py              # Benchmark runner & CI faithfulness regression gate
+├── deploy/gcp/                  # Google Cloud Compute Engine deployment automation
+│   ├── deploy.sh                # Automated Ubuntu Docker, UFW, .env & Certbot SSL setup
+│   └── README.md                # GCP firewall, upload & GCS storage guide
+├── infra/
+│   ├── grafana/                 # Provisioned metrics dashboards
+│   ├── nginx/                   # Hardened Nginx reverse proxy + TLS SSL template
+│   ├── postgres/rls_policies.sql# Optional PostgreSQL Row-Level Security SQL policies
+│   └── prometheus/              # Prometheus scrape configuration
+├── ARCHITECTURE.md              # Architectural Decision Records (ADRs) & Interview Script
+├── EVALUATION.md                # Retrieval & generation benchmark analysis
+├── PROJECT_EXPLAINED.md         # Deep-dive system walkthrough
+├── Project1_Blueprint_DocIntel (1).md # Full architectural blueprint (synced to codebase)
+├── Project 1 blueprint.docx     # Formatted Microsoft Word blueprint export
+├── docker-compose.yml           # 8-container local development & observability stack
+├── docker-compose.prod.yml      # 7-container hardened production stack (+ Nginx, - dev ports)
+├── .env.example                 # Local development environment template
+├── .env.prod.example            # Production / GCP environment template
+└── Makefile                     # Developer shortcuts (up, down, test, lint, seed, eval)
 ```
 
 ---
 
-## 3. Evaluation Results (Hand-Crafted 50-Question Golden Benchmark)
+## 3. Evaluation Results (50-Question Golden Benchmark)
 
-| Pipeline Configuration | Faithfulness (RAGAS) | Answer Relevancy | Hit@5 | MRR | Refusal Accuracy | p95 Latency | Cost / Query ($) |
+Baseline comparison recorded in [`EVALUATION.md`](EVALUATION.md) via [`eval/run_eval.py`](eval/run_eval.py) *(synthetic deterministic benchmark over the 50-question golden set; latest CI gate verification scored `0.943` faithfulness $\ge 0.85$)*:
+
+| Pipeline Configuration | Faithfulness | Answer Relevancy | Hit@5 | MRR | Refusal Accuracy | p95 Latency | Cost / Query ($) |
 |---|---|---|---|---|---|---|---|
 | **v1 Naive Baseline** (Dense-only top-5) | 0.72 | 0.78 | 0.70 | 0.56 | 0.40 | 0.44s | $0.0031 |
 | **v2 Hybrid + Multi-Query** (+ BM25 + RRF) | 0.82 | 0.86 | 0.84 | 0.72 | 1.00 | 0.61s | $0.0044 |
 | **v3 Full Stack** (+ Cross-Encoder Re-rank + Citations) | **0.90** | **0.91** | **0.92** | **0.84** | **1.00** | 0.78s | $0.0048 |
 
-Detailed metric analysis and regression gate specifications are documented in [EVALUATION.md](file:///d:/PROJECTS/DocIntel%20%E2%80%94%20Multi-Tenant%20Enterprise%20Document%20Intelligence%20Platform/EVALUATION.md).
-
 ---
 
-## 4. Key Capabilities & Technical Highlights
+## 4. Key Capabilities & Security Highlights
 
-- [x] **Zero-Leak Multi-Tenancy**: Denormalized `org_id` on chunks enforced in every SQL `WHERE` clause.
-- [x] **Automated Test Suite**: 24 comprehensive pytest integration tests covering auth, RBAC, ingestion, retrieval, and tenant isolation (100% passing).
-- [x] **Layout-Aware Chunking & Section Linking**: Preserves tables whole as markdown; concatenates section titles with content tsvectors to resolve cross-page table splits.
-- [x] **Bidirectional Unicode Sanitizer**: Automatically cleans invisible control markers (`\u202d`, `\u202c`, zero-width spaces) from Google Docs/Word PDF exports.
-- [x] **Verified Citations**: Emits inline `[1]`, `[2]` chips with document, section, and page source snippets; purges hallucinated citations.
-- [x] **Multi-Model Cascade**: Ultra-low latency streaming via Groq Qwen/Llama with automatic failover to Gemini Flash, OpenAI, and local grounded extraction.
-- [x] **Semantic Caching**: Sub-millisecond Redis vector cache for cosine similarity $>0.97$.
-- [x] **Token Budget Governance**: Monthly quota enforcement returning HTTP 429 when exhausted.
-- [x] **CI/CD Quality Gate**: Ruff linting, Mypy type-checking, test suite with coverage, and automated RAGAS regression gate.
+- [x] **Zero-Leak Multi-Tenancy + RLS Context**: Denormalized `org_id` on chunks enforced in SQL `WHERE` clauses, token-to-DB `org_id` validation, same-org BOLA conversation ownership checks (`user_id`), and PostgreSQL `app.current_org_id` RLS binding.
+- [x] **Defense-in-Depth Auth & Access Governance**: SlowAPI global & endpoint rate limiting, Redis brute-force account lockout (`5` failures → `15` min), JWT `jti` blacklisting (`/auth/logout`), single-use refresh token rotation, instant session revocation on member deletion, and invite privilege-escalation blocks.
+- [x] **Document Armor & GenAI Guardrails**: Binary magic-byte signature validation, 100 MB Zip-bomb protection, path-traversal filename sanitization, prompt-injection detection, `<retrieved_context>` XML isolation fences, and Luhn-validated PII/API-key masking prior to cloud LLM calls.
+- [x] **Immutable Security Audit Trail**: Tenant-scoped `audit_logs` table recording auth, offboarding, budget, and document events (`GET /api/v1/admin/audit-logs`).
+- [x] **Layout-Aware Chunking & Section-Linked Hybrid Retrieval**: Preserves tables whole as Markdown; combines `pgvector` HNSW (`BAAI/bge-small-en-v1.5`, 384d) + Postgres `tsvector` (`section_title || content_tsv`) via RRF ($k=60$) and `BAAI/bge-reranker-v2-m3`.
+- [x] **Verified Citations & Resilient LLM Waterfall**: Streams SSE tokens via LiteLLM (`Groq → Gemini → OpenAI → Local Grounded Engine`), validates `[1]` citation indices, and purges unsupported markers.
+- [x] **Langfuse v4 + Prometheus + Grafana Observability**: Typed OpenTelemetry spans (`SPAN` → `RETRIEVER` → `GENERATION`) linked to user/session/tenant attributes alongside Prometheus & Grafana dashboards.
+- [x] **34 Passing Automated Tests & CI Gate**: Full Ruff linting/formatting, 34 pytest integration & security tests, Docker container builds, and retrieval regression gating.
 
 ---
 
 ## 5. Quick Start
 
-### Option A: Complete Microservices Stack with Docker Compose (Recommended)
+### Option A: Local Development Stack (`docker-compose.yml` — 8 Containers)
 
 ```bash
-# 1. Clone repository & configure environment
+# 1. Configure local environment
 cp .env.example .env
 
-# 2. Spin up all 7 microservices
-docker compose up -d
+# 2. Build & start db, redis, minio (seaweedfs), api, worker, prometheus, grafana, frontend
+docker compose up -d --build
 
-# 3. Apply database migrations & seed initial demo data
-docker compose exec api alembic upgrade head
+# 3. Seed demo organizations, users & sample chunks
 docker compose exec api python app/scripts/seed.py
 ```
 
-- **Frontend Executive UI**: [http://localhost:3000](http://localhost:3000) (or [http://localhost:8000/app/index.html](http://localhost:8000/app/index.html))
-- **Interactive OpenAPI Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **Prometheus Metrics**: [http://localhost:9090](http://localhost:9090)
-- **Grafana Dashboards**: [http://localhost:3002](http://localhost:3002) (Login: `admin` / `admin`)
-- **MinIO Console**: [http://localhost:9001](http://localhost:9001) (Login: `minioadmin` / `minioadmin`)
+* **Next.js Web UI**: [http://localhost:3000](http://localhost:3000) (or embedded dev UI at [http://localhost:8000/app/index.html](http://localhost:8000/app/index.html))
+* **Interactive Swagger API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+* **Prometheus Metrics**: [http://localhost:9090](http://localhost:9090)
+* **Grafana Dashboards**: [http://localhost:3002](http://localhost:3002) (`admin` / `admin`)
+* **SeaweedFS S3 Endpoint**: `http://localhost:9000`
 
----
+### Option B: Hardened Production / Google Cloud (`docker-compose.prod.yml`)
 
-### Option B: Local Python Development Run
+Use [`deploy/gcp/deploy.sh`](deploy/gcp/deploy.sh) on an Ubuntu Compute Engine VM behind Nginx (ports `80`/`443` only, Swagger `/docs` disabled, demo logins hidden, Gunicorn 4 workers):
 
 ```bash
-# 1. Install dependencies
-cd backend
-python -m pip install -r requirements.txt
-
-# 2. Run database migrations or seed data
-python app/scripts/seed.py
-
-# 3. Launch FastAPI development server
-uvicorn app.main:app --reload --port 8000
+chmod +x deploy/gcp/deploy.sh
+./deploy/gcp/deploy.sh your-domain.com admin@your-domain.com
 ```
 
-Open your browser to: **[http://localhost:8000/app/index.html](http://localhost:8000/app/index.html)**
+See [`deploy/gcp/README.md`](deploy/gcp/README.md) and [`.env.prod.example`](.env.prod.example) for complete GCP deployment instructions.
 
 ---
 
-## 6. Pre-Seeded Demonstration Accounts
+## 6. Pre-Seeded Development Accounts
+
+*(Available locally after running `seed.py`; demo credential helpers are automatically disabled in production builds unless `NEXT_PUBLIC_DEMO_MODE=true` is explicitly enabled.)*
 
 | Tenant Organization | User Email | Password | Role | Description |
 |---|---|---|---|---|
-| **Acme Corporation** | `admin@acme.com` | `Password123!` | Owner | Access to Q4 Financials & Security Policy |
-| **Acme Corporation** | `analyst@acme.com` | `Password123!` | Member | Standard member (cannot access admin endpoints) |
-| **Zephyr Industries** | `admin@zephyr.com` | `Password123!` | Owner | Owns confidential proprietary engine margin analysis |
+| **Acme Corporation** | `admin@acme.com` | `Password123!` | Owner | Full org, member, audit-log & budget governance |
+| **Acme Corporation** | `analyst@acme.com` | `Password123!` | Member | Standard user (blocked from `/admin` routes) |
+| **Zephyr Industries** | `admin@zephyr.com` | `Password123!` | Owner | Second isolated tenant for cross-org verification |
 
 ---
 
 ## 7. Running Tests & Evaluation
 
 ```bash
-# Run full automated test suite (24 tests)
-pytest backend/tests/ -v
+# Run full automated test suite inside API container (34 tests across 7 files)
+docker compose exec api pytest tests/ -v
 
-# Run the strict multi-tenant isolation test
-pytest backend/tests/test_tenant_isolation.py -v
+# Run security hardening test suite specifically
+docker compose exec api pytest tests/test_security.py -v
 
-# Run 50-question golden evaluation benchmark across v1, v2, and v3
+# Run CI quality checks
+ruff check backend/app backend/tests --config backend/pyproject.toml
+ruff format --check backend/app backend/tests --config backend/pyproject.toml
+
+# Run 50-question evaluation benchmark & CI gate (Faithfulness >= 0.85)
 python eval/run_eval.py --version all
-
-# Run CI Gate validation (checks Faithfulness >= 0.85)
 python eval/run_eval.py --version v3 --ci-gate --min-faithfulness 0.85
 ```

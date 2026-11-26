@@ -89,7 +89,7 @@ Stream Tokens                                                     Stream Tokens
                                                                         ▼ (If all fail)
                                                           [Local Smart Grounded Engine]
 ```
-- Guarantees 99.99% system availability even during third-party LLM outages.
+- Guarantees continuous fallback availability even during third-party LLM outages or missing cloud keys.
 
 ---
 
@@ -141,3 +141,24 @@ A centralized Unicode cleaning pass is enforced at three boundaries:
 ```python
 clean_text = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", text).strip()
 ```
+
+---
+
+## 8. ADR 8: Defense-in-Depth Multi-Tenant & GenAI Security
+
+### Key Threats Addressed
+1. **Same-Tenant Conversation BOLA (IDOR):** Even within a single organization, user B must not read, query, or delete user A's private chat session (`Conversation.user_id == current_user.id` enforced alongside `org_id`).
+2. **Session Persistence After Logout or Offboarding:** Pure stateless JWTs remain valid until `exp`. DocIntel pairs short-lived access tokens (`jti` + `iat_ms`) with Redis revocation (`POST /api/v1/auth/logout`), single-use refresh token rotation, and `revoke_all_user_tokens` on member removal.
+3. **Database Kernel Isolation (PostgreSQL RLS):** In addition to explicit SQL `WHERE org_id = :org_id` filters, `get_current_user` binds `app.current_org_id` on PostgreSQL sessions via parameterized `set_config(...)` (`infra/postgres/rls_policies.sql`).
+4. **Upload Exploits & GenAI Guardrails:** Multipart uploads enforce extension/MIME allowlists, binary magic-byte inspection (`%PDF-`, `PK\x03\x04`, OLE2), a 100 MB Zip-bomb limit, and sanitized S3/local paths (`documents.py`, `storage.py`). Outbound LLM calls redact SSNs, private keys, API keys, and Luhn-validated card numbers (`guardrails.py`), fence chunks in `<retrieved_context>`, and block overt prompt-injection overrides.
+
+---
+
+## 9. ADR 9: Dual Compose Topology & Langfuse v4 Telemetry
+
+### Why Keep Both `docker-compose.yml` and `docker-compose.prod.yml`?
+- **Development (`docker-compose.yml`):** Exposes Postgres (`5432`), Redis (`6379`), SeaweedFS (`9000`), FastAPI Swagger `/docs` (`8000`), Next.js (`3000`), Prometheus (`9090`), and Grafana (`3002`) for rapid local iteration and inspection.
+- **Production (`docker-compose.prod.yml` + `deploy/gcp/deploy.sh`):** Closes all internal DB/cache/storage ports, routes strictly via Nginx (`80`/`443` with rate limits, HSTS/security headers, and internal-only `/metrics`), runs 4-worker Gunicorn, enforces Redis `--requirepass`, hides Swagger `/docs` & demo login buttons, and validates strong secrets at startup.
+
+### Langfuse v4 OpenTelemetry Instrumentation
+- `core/tracing.py` uses `propagate_attributes` and typed observations (`SPAN` root → `SPAN` cache lookup → `RETRIEVER` hybrid search → `GENERATION` completion) tied to `session_id`, `user_id`, and `org:<org_id>` tags, flushing asynchronously without blocking SSE token streams.
