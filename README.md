@@ -45,7 +45,7 @@
     ┌──────────────────────────┐                       │ Langfuse v4│
     │   Celery Workers         │                       │ OTel trace │
     │ 1. download from S3      │                       └────────────┘
-    │ 2. parse layout & tables │
+    │ 2. parse layout + OCR    │
     │ 3. chunk (layout-aware)  │                       ┌────────────┐
     │ 4. embed (bge-small 384d)│                       │ Prometheus │
     │ 5. upsert to pgvector    │                       │ + Grafana  │
@@ -63,15 +63,15 @@
 
 ```text
 ├── .agents/skills/langfuse/     # Installed Langfuse AI observability & eval skill
-├── .github/workflows/ci.yml     # CI/CD: Ruff, Pytest (34 tests), Docker builds, Eval Gate
+├── .github/workflows/ci.yml     # CI/CD: Ruff, Pytest (47 tests), Docker builds, Eval Gate
 ├── backend/
 │   ├── alembic/                 # Database migrations (PostgreSQL + pgvector schema)
 │   ├── app/
 │   │   ├── api/v1/              # FastAPI REST endpoints & route controllers
 │   │   │   ├── admin.py         # Tenant usage, budgets, member invites/removal, audit logs
 │   │   │   ├── auth.py          # JWT register, login, refresh rotation, logout & /me
-│   │   │   ├── chat.py          # SSE token streaming, BOLA checks & conversational RAG
-│   │   │   ├── documents.py     # Magic-byte validated upload, status tracking & delete
+│   │   │   ├── chat.py          # SSE streaming, multi-PDF scoping, BOLA checks & RAG
+│   │   │   ├── documents.py     # Magic-byte upload, status polling, reprocess (Re-OCR) & delete
 │   │   │   ├── health.py        # Liveness & leak-free readiness probes
 │   │   │   └── router.py        # Centralized API v1 router aggregator
 │   │   ├── core/                # System infrastructure & security controls
@@ -100,29 +100,30 @@
 │   │   │   ├── embeddings.py    # fastembed / SentenceTransformer (384d) + fallback
 │   │   │   ├── generation.py    # LiteLLM cascade router, XML fencing & citation verifier
 │   │   │   ├── guardrails.py    # Prompt-injection detection & Luhn/PII redaction
-│   │   │   ├── parsing.py       # PyMuPDF / python-docx / openpyxl layout parser
-│   │   │   ├── retrieval.py     # Hybrid search (pgvector + BM25 + RRF + Cross-Encoder)
+│   │   │   ├── ocr.py           # RapidOCR + OpenCV/Pillow adaptive scan & skew preprocessing
+│   │   │   ├── parsing.py       # PyMuPDF (+ high-DPI & painted-image OCR) / DOCX / XLSX
+│   │   │   ├── retrieval.py     # Hybrid search, scoped full-policy mode, RRF & Cross-Encoder
 │   │   │   └── storage.py       # S3 / SeaweedFS storage with traversal-guarded local fallback
 │   │   ├── static/index.html    # Standalone embedded browser UI (non-production)
-│   │   ├── workers/             # Celery worker app & async document ingestion tasks
+│   │   ├── workers/             # Celery worker & atomic chunk-replacing ingestion tasks
 │   │   ├── config.py            # Production-validated Pydantic BaseSettings
 │   │   ├── deps.py              # AsyncSession, JWT revocation check & Postgres RLS context
 │   │   └── main.py              # App factory, security headers, CORS, SlowAPI & Prometheus
-│   ├── tests/                   # 34 automated pytest tests across 7 test suites
+│   ├── tests/                   # 47 automated pytest tests across 7 test suites
 │   │   ├── conftest.py          # Async PostgreSQL test engine & dual-tenant fixtures
 │   │   ├── test_auth.py         # Auth, registration, RBAC & member offboarding tests (8)
-│   │   ├── test_chat.py         # Chat endpoints, SSE streaming & budget enforcement (3)
-│   │   ├── test_citations.py    # Citation extraction & hallucination stripping (4)
-│   │   ├── test_ingestion.py    # Upload, idempotency, chunking & layout tests (4)
-│   │   ├── test_retrieval.py    # Hybrid search, BM25, RRF fusion & semantic cache (5)
+│   │   ├── test_chat.py         # Conversations, multi-PDF scoping, SSE & budget tests (5)
+│   │   ├── test_citations.py    # Citation extraction & hallucination stripping (5)
+│   │   ├── test_ingestion.py    # Upload, OCR scans, shared XObject, reprocess & chunks (10)
+│   │   ├── test_retrieval.py    # Complete-doc scope, subset filtering, BM25, RRF & cache (9)
 │   │   ├── test_security.py     # Headers, magic bytes, BOLA, lockout, guardrails & audit (9)
 │   │   └── test_tenant_isolation.py # Zero-leak cross-tenant query isolation test (1)
 │   ├── Dockerfile               # Production multi-stage non-root backend container
 │   ├── pyproject.toml           # Ruff, Mypy & Pytest configuration
 │   └── requirements.txt         # Backend Python dependencies
 ├── frontend/                    # Next.js 15 / React 19 Enterprise Web Application
-│   ├── app/                     # App Router pages ((auth)/login, (app)/chat, documents, admin)
-│   ├── components/              # Navbar, ChatStream, CitationCard, UploadDropzone
+│   ├── app/                     # (auth)/login, (app)/chat (?docs=), documents (Re-OCR), admin
+│   ├── components/              # Navbar, ChatStream (multi-PDF checkboxes), CitationCard, UploadDropzone
 │   ├── lib/                     # api.ts & useSSE.ts (relative/same-origin Nginx ready)
 │   ├── Dockerfile               # Node.js 20 Alpine multi-stage build (with NEXT_PUBLIC args)
 │   └── package.json             # Next.js 15, React 19, Tailwind CSS, lucide-react
@@ -169,10 +170,11 @@ Baseline comparison recorded in [`EVALUATION.md`](EVALUATION.md) via [`eval/run_
 - [x] **Defense-in-Depth Auth & Access Governance**: SlowAPI global & endpoint rate limiting, Redis brute-force account lockout (`5` failures → `15` min), JWT `jti` blacklisting (`/auth/logout`), single-use refresh token rotation, instant session revocation on member deletion, and invite privilege-escalation blocks.
 - [x] **Document Armor & GenAI Guardrails**: Binary magic-byte signature validation, 100 MB Zip-bomb protection, path-traversal filename sanitization, prompt-injection detection, `<retrieved_context>` XML isolation fences, and Luhn-validated PII/API-key masking prior to cloud LLM calls.
 - [x] **Immutable Security Audit Trail**: Tenant-scoped `audit_logs` table recording auth, offboarding, budget, and document events (`GET /api/v1/admin/audit-logs`).
-- [x] **Layout-Aware Chunking & Section-Linked Hybrid Retrieval**: Preserves tables whole as Markdown; combines `pgvector` HNSW (`BAAI/bge-small-en-v1.5`, 384d) + Postgres `tsvector` (`section_title || content_tsv`) via RRF ($k=60$) and `BAAI/bge-reranker-v2-m3`.
-- [x] **Verified Citations & Resilient LLM Waterfall**: Streams SSE tokens via LiteLLM (`Groq → Gemini → OpenAI → Local Grounded Engine`), validates `[1]` citation indices, and purges unsupported markers.
+- [x] **Layout-Aware Chunking, High-DPI OCR & Re-Indexing**: Preserves tables whole as Markdown; runs `RapidOCR` + OpenCV deskew/adaptive enhancement on low-text scans (`< 50` chars at `250 DPI`) and painted embedded images (`get_image_info(xrefs=True)` to avoid shared `/Resources/XObject` duplication), plus one-click **Re-OCR** (`POST /api/v1/documents/{document_id}/reprocess`) with atomic chunk replacement; combines `pgvector` HNSW (`BAAI/bge-small-en-v1.5`, 384d) + Postgres `tsvector` (`section_title || content_tsv`) via RRF ($k=60$) and `BAAI/bge-reranker-v2-m3`.
+- [x] **Strict Multi-PDF Checkbox Scoping & Complete-Policy Mode**: Checkboxes before every PDF in `/documents` (`Ask Selected PDFs`) and `/chat` (`Source PDFs` popover) let users lock answers to 1, 2, 3, or all PDFs (`conversations.document_ids`). Within budget (`<= 30` chunks / `12,000` tokens), DocIntel reads all ordered pages/clauses before answering and isolates Redis semantic cache per `document_ids` set.
+- [x] **Verified Citations & Resilient LLM Waterfall**: Streams SSE tokens via LiteLLM (`Groq → Gemini → OpenAI → Local Grounded Engine`), validates `[1]` citation indices, purges unsupported markers, and refuses ungrounded queries with `"I could not find this in the provided documents."`.
 - [x] **Langfuse v4 + Prometheus + Grafana Observability**: Typed OpenTelemetry spans (`SPAN` → `RETRIEVER` → `GENERATION`) linked to user/session/tenant attributes alongside Prometheus & Grafana dashboards.
-- [x] **34 Passing Automated Tests & CI Gate**: Full Ruff linting/formatting, 34 pytest integration & security tests, Docker container builds, and retrieval regression gating.
+- [x] **47 Passing Automated Tests & CI Gate**: Full Ruff linting/formatting, 47 pytest integration, OCR, scoping & security tests, Next.js 15 & Docker container builds, and retrieval regression gating.
 
 ---
 
@@ -191,11 +193,12 @@ docker compose up -d --build
 docker compose exec api python app/scripts/seed.py
 ```
 
-* **Next.js Web UI**: [http://localhost:3000](http://localhost:3000) (or embedded dev UI at [http://localhost:8000/app/index.html](http://localhost:8000/app/index.html))
+* **Next.js Web UI**: [http://localhost:3000](http://localhost:3000) (Login: `/login`, Vault & **Re-OCR**: `/documents`, Multi-PDF Chat: `/chat`, Admin: `/admin`)
 * **Interactive Swagger API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
 * **Prometheus Metrics**: [http://localhost:9090](http://localhost:9090)
 * **Grafana Dashboards**: [http://localhost:3002](http://localhost:3002) (`admin` / `admin`)
 * **SeaweedFS S3 Endpoint**: `http://localhost:9000`
+* **Langfuse Cloud Traces**: [https://us.cloud.langfuse.com](https://us.cloud.langfuse.com) (configured via `.env`)
 
 ### Option B: Hardened Production / Google Cloud (`docker-compose.prod.yml`)
 
@@ -225,11 +228,11 @@ See [`deploy/gcp/README.md`](deploy/gcp/README.md) and [`.env.prod.example`](.en
 ## 7. Running Tests & Evaluation
 
 ```bash
-# Run full automated test suite inside API container (34 tests across 7 files)
-docker compose exec api pytest tests/ -v
+# Run full automated test suite inside API container (47 tests across 7 files)
+docker compose exec -e PYTHONPATH=. api pytest tests/ -v
 
 # Run security hardening test suite specifically
-docker compose exec api pytest tests/test_security.py -v
+docker compose exec -e PYTHONPATH=. api pytest tests/test_security.py -v
 
 # Run CI quality checks
 ruff check backend/app backend/tests --config backend/pyproject.toml

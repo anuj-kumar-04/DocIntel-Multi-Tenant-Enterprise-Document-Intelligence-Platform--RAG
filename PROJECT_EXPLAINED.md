@@ -1,25 +1,26 @@
 # DocIntel — Platform Explained
 
-Welcome to **DocIntel**, an enterprise-grade, security-hardened multi-tenant document intelligence platform built to ingest organizational documents (PDF, DOCX, XLSX, TXT, MD), index them via layout-aware chunking and hybrid retrieval, and stream grounded answers with verified page-level inline citations.
+Welcome to **DocIntel**, an enterprise-grade, security-hardened multi-tenant document intelligence platform built to ingest organizational documents (PDF including scanned pages and embedded images, DOCX, XLSX, TXT, and MD), index them via layout-aware chunking + high-DPI OCR + hybrid retrieval, and stream grounded answers with verified page-level inline citations.
 
 ---
 
 ## 1. Core Problem & End-to-End Solution
 
-Enterprise teams store critical records across siloed financial filings, contracts, and policy PDFs where standard search and naive RAG fail:
+Enterprise teams store critical records across siloed financial filings, contracts, scanned appendices, and policy PDFs where standard search and naive RAG fail:
 1. **Broken table & cross-page retrieval**: Naive fixed-size splitting breaks tables and separates section headings from table bodies.
-2. **LLM hallucinations & unverified answers**: Unsupported generations invent figures or fabricate sources.
-3. **Cross-tenant & same-tenant leaks**: Weak SQL or object checks risk data leakage across companies or between users in private chats.
-4. **Security & upload risks**: Unchecked uploads, missing rate limits, and stale JWTs leave multi-tenant SaaS apps vulnerable in production.
-5. **Unbounded LLM costs**: Single-provider outages, duplicate queries, and uncapped usage burn API budgets.
+2. **Missed text in scanned PDFs & embedded images**: Standard text parsers ignore rasterized receipts, stamps, or scanned appendices embedded inside native PDFs.
+3. **LLM hallucinations & unverified answers**: Unsupported generations invent figures, ignore policy exceptions, or mix unrelated PDFs.
+4. **Cross-tenant & same-tenant leaks**: Weak SQL or object checks risk data leakage across companies or between users in private chats.
+5. **Security & upload risks**: Unchecked uploads, missing rate limits, and stale JWTs leave multi-tenant SaaS apps vulnerable in production.
+6. **Unbounded LLM costs**: Single-provider outages, duplicate queries, and uncapped usage burn API budgets.
 
 **How DocIntel solves these challenges in production:**
 * **Zero-Leak Multi-Tenancy + RLS Context**: `org_id` is denormalized on `chunks`, enforced in every SQL `WHERE` clause, verified against JWT claims in `deps.py`, and bound per session via PostgreSQL `set_config('app.current_org_id', ...)`. Same-organization private conversations enforce `Conversation.user_id == current_user.id`.
 * **Defense-in-Depth Application & GenAI Security**: Magic-byte + Zip-bomb file upload validation (`documents.py`), directory-traversal guards (`storage.py`), SlowAPI rate limiting + Redis brute-force lockout, JWT `jti` blacklisting & refresh rotation, instant token revocation upon member removal, HTTP security headers, prompt-injection detection, Luhn-checked PII/secret redaction (`guardrails.py`), and an immutable `AuditLog` (`audit_logs`).
-* **Asynchronous Celery Ingestion**: Document downloads, multi-format parsing (`PyMuPDF`, `python-docx`, `openpyxl`), Unicode sanitization, `LayoutChunker`, and `BAAI/bge-small-en-v1.5` batched embeddings run asynchronously on Celery workers with exponential backoff retries (`max_retries=3`).
-* **Section-Aware Hybrid Retrieval**: Combines dense `pgvector` HNSW cosine search with PostgreSQL sparse full-text search over concatenated `(to_tsvector('english', section_title) || content_tsv)`, merged via Reciprocal Rank Fusion ($k=60$) and re-ranked by `BAAI/bge-reranker-v2-m3`.
+* **Asynchronous Celery Ingestion + High-DPI RapidOCR**: Document downloads, multi-format parsing (`PyMuPDF`, `python-docx`, `openpyxl`), adaptive `RapidOCR` + OpenCV scan preprocessing (`250 DPI` full-page OCR for low-text pages `< 50` chars, plus raw-stream `extract_image(xref)` & `get_image_info(xrefs=True)` for painted hybrid images), Unicode sanitization, `LayoutChunker`, and `BAAI/bge-small-en-v1.5` batched embeddings run asynchronously on Celery workers with atomic chunk replacement and `POST /api/v1/documents/{id}/reprocess` (`Re-OCR`).
+* **Multi-PDF Checkbox Scoping & Complete-Policy Hybrid Retrieval**: Users select 1, 2, 3, or all PDFs via checkboxes in `/documents` (`Ask Selected PDFs`) or `/chat` (`Source PDFs`), persisted in `conversations.document_ids`. Scoped requests fit within `_SCOPED_FULL_DOC_MAX_CHUNKS` (`30`) / `_SCOPED_FULL_DOC_MAX_TOKENS` (`12,000`) read the full selected PDF(s) in order; larger corpora run dense `pgvector` HNSW + PostgreSQL sparse `ts_rank_cd` (`section_title || content_tsv`), merged via Reciprocal Rank Fusion ($k=60$) and re-ranked by `BAAI/bge-reranker-v2-m3`.
 * **Verified Citations & Resilient LLM Cascade**: Routes queries through `LiteLLM` (`Groq → Gemini → OpenAI → Local Grounded Engine`) with `<retrieved_context>` prompt isolation and post-check regex citation verification (`verify_and_clean_citations()`).
-* **Full-Stack Telemetry & Quality Gates**: Langfuse v4 OpenTelemetry tracing (`SPAN → RETRIEVER → GENERATION` with `session_id`, `user_id`, and tenant tags), Prometheus + Grafana metrics, Ruff lint/formatting, **34 automated pytest tests**, and a CI retrieval quality gate ($\ge 0.85$ faithfulness).
+* **Full-Stack Telemetry & Quality Gates**: Langfuse v4 OpenTelemetry tracing (`SPAN → RETRIEVER → GENERATION` with `session_id`, `user_id`, and tenant tags), Prometheus + Grafana metrics, Ruff lint/formatting, **47 automated pytest tests**, and a CI retrieval quality gate ($\ge 0.85$ faithfulness).
 
 ---
 
@@ -34,8 +35,8 @@ Enterprise teams store critical records across siloed financial filings, contrac
 │   │   ├── api/v1/              # FastAPI REST API Controllers
 │   │   │   ├── admin.py         # Tenant usage, budgets, member invite/delete, audit-logs
 │   │   │   ├── auth.py          # Register, login, refresh rotation, logout & /me
-│   │   │   ├── chat.py          # SSE streaming chat, prompt-injection check & BOLA guard
-│   │   │   ├── documents.py     # Magic-byte upload validation, status polling & deletion
+│   │   │   ├── chat.py          # SSE streaming, multi-PDF scoping, injection check & BOLA guard
+│   │   │   ├── documents.py     # Magic-byte upload validation, status polling, /reprocess & delete
 │   │   │   ├── health.py        # Liveness & leak-free readiness probes
 │   │   │   └── router.py        # API v1 router registry
 │   │   ├── core/                # Core infrastructure & security
@@ -64,16 +65,17 @@ Enterprise teams store critical records across siloed financial filings, contrac
 │   │   │   ├── embeddings.py    # fastembed / SentenceTransformer + SHA-256 fallback
 │   │   │   ├── generation.py    # LiteLLM waterfall, PII masking, XML fence & verifier
 │   │   │   ├── guardrails.py    # Prompt-injection detection & PII/secret redaction
-│   │   │   ├── parsing.py       # PyMuPDF / python-docx / openpyxl layout parser
-│   │   │   ├── retrieval.py     # QueryRewriter, pgvector, BM25, RRF & CrossEncoderReranker
+│   │   │   ├── ocr.py           # RapidOCR + OpenCV/Pillow scan upscaling, denoise, CLAHE & deskew
+│   │   │   ├── parsing.py       # PyMuPDF (+ high-DPI & painted-image OCR) / DOCX / XLSX
+│   │   │   ├── retrieval.py     # Complete-doc scope, multi-PDF filter, BM25, RRF & reranker
 │   │   │   └── storage.py       # S3/SeaweedFS client with traversal-safe local fallback
 │   │   ├── static/index.html    # Embedded standalone dev UI (disabled in production)
-│   │   ├── workers/             # Celery app & process_document_pipeline task
+│   │   ├── workers/             # Celery app & idempotent process_document_pipeline task
 │   │   ├── config.py            # Environment settings with prod fail-fast security check
 │   │   ├── deps.py              # AsyncSession, JWT revocation check & Postgres RLS context
 │   │   └── main.py              # FastAPI factory, SecurityHeadersMiddleware, CORS & metrics
-│   └── tests/                   # 34 automated tests across 7 files
-├── frontend/                    # Next.js 15 / React 19 / TypeScript / Tailwind UI
+│   └── tests/                   # 47 automated tests across 7 files
+├── frontend/                    # Next.js 15 / React 19 UI (multi-PDF checkboxes + Re-OCR)
 ├── eval/                        # 50-question golden benchmark & CI faithfulness gate
 ├── deploy/gcp/                  # Automated Google Cloud VM deployment script & guide
 ├── infra/
@@ -94,9 +96,9 @@ Enterprise teams store critical records across siloed financial filings, contrac
 
 ## 3. End-to-End Execution Lifecycles
 
-### Pipeline 1: Secure Document Ingestion Lifecycle
+### Pipeline 1: Secure Document Ingestion & OCR Lifecycle
 ```text
-1. Client POST /api/v1/documents (Multipart File + Bearer JWT)
+1. Client POST /api/v1/documents (or POST /api/v1/documents/{id}/reprocess for Re-OCR)
    ├─► Check file size (>0 and <= 50 MB)
    ├─► Sanitize filename (strip directories / unsafe chars)
    ├─► Verify extension + MIME type + binary magic bytes (%PDF-, PK zip <=100MB, OLE2, text)
@@ -104,33 +106,38 @@ Enterprise teams store critical records across siloed financial filings, contrac
    │
 2. Stream file to S3 / SeaweedFS (key: org_{org_id}/{doc_id}_{safe_filename})
    │
-3. Persist Document (status=QUEUED), write AuditLog (DOCUMENT_UPLOADED), enqueue Celery task
+3. Persist Document (status=QUEUED), write AuditLog, enqueue Celery task (or FastAPI fallback)
    │
 4. Celery Worker (process_document_pipeline)
-   ├─► Update status=PARSING → extract PDF tables/blocks, DOCX, or XLSX via DocumentParser
-   ├─► Run LayoutChunker (target=700 tokens, overlap=100, preserves tables & section titles)
+   ├─► Update status=PARSING → extract PDF text/tables, DOCX, or XLSX via DocumentParser
+   ├─► Adaptive OCR (parsing.py + ocr.py):
+   │     • Low-text pages (< 50 native chars): render at 250 DPI & run RapidOCR
+   │     • Hybrid pages: check page.get_image_info(xrefs=True) (ignores shared un-drawn XObjects),
+   │       prefer raw doc.extract_image(xref) when unmasked/axis-aligned, preprocess & deduplicate lines
+   ├─► Run LayoutChunker (target=700 tokens, overlap=100, flushes cleanly at page boundaries)
    ├─► Update status=EMBEDDING → generate batched 384d vectors via EmbeddingService
-   ├─► Insert Chunk rows (with denormalized org_id & generated content_tsv)
-   └─► Update Document status=READY (or FAILED with error_message; Celery retries up to 3x)
+   ├─► Atomically replace Chunk rows for document.id (with org_id & generated content_tsv)
+   └─► Update Document status=READY, invalidate Redis semantic cache (Celery retries up to 3x)
 ```
 
-### Pipeline 2: Guardrailed Hybrid Retrieval & Re-ranking Lifecycle
+### Pipeline 2: Guardrailed Multi-PDF Hybrid Retrieval & Re-ranking Lifecycle
 ```text
 1. Client POST /api/v1/chat/conversations/{conversation_id}/ask (SSE + SlowAPI 30/min)
    ├─► Verify prompt-injection guardrails (reject adversarial system overrides -> HTTP 400)
    ├─► Enforce BudgetService monthly token limit (-> HTTP 429 if exceeded)
    ├─► Verify strict conversation ownership (org_id == user.org_id AND user_id == user.id)
+   ├─► Resolve strict document scope (req.document_ids override or persisted conv.document_ids)
    │
-2. Semantic Cache Check (Redis hash org:{org_id}:semantic_cache)
+2. Scoped Semantic Cache Check (Redis hash org:{org_id}:semantic_cache, field scoped by sorted document_ids)
    └─► Cosine similarity >= 0.97 → stream cached tokens + citations immediately
    │
 3. RetrievalEngine (v3 pipeline inside Langfuse RETRIEVER span)
-   ├─► QueryRewriter: coreference resolution + up to 3 query variations
-   ├─► Embed queries (384d) and run sequential AsyncSession-safe searches:
-   │     • Dense: pgvector HNSW cosine distance (WHERE org_id = :org_id)
-   │     • Sparse: Postgres ts_rank_cd over (section_title || content_tsv) (WHERE org_id = :org_id)
-   ├─► Reciprocal Rank Fusion (k=60) → top 30 candidate pool
-   └─► CrossEncoderReranker (BAAI/bge-reranker-v2-m3 or lexical/table-boost fallback) → top 6
+   ├─► If scoped PDFs fit budget (<= 30 chunks & <= 12,000 tokens): return ALL ordered chunks (complete-policy mode)
+   ├─► Otherwise:
+   │     • QueryRewriter: coreference resolution + up to 3 query variations
+   │     • Dense: pgvector HNSW cosine distance (WHERE org_id = :org_id [+ document_id = ANY(:doc_ids)])
+   │     • Sparse: Postgres ts_rank_cd over (section_title || content_tsv) (+ multi-keyword ILIKE fallback)
+   │     • Reciprocal Rank Fusion (k=60) → CrossEncoderReranker (BAAI/bge-reranker-v2-m3) + neighbor expansion
 ```
 
 ### Pipeline 3: Grounded Generation, Privacy & Observability Lifecycle
@@ -171,6 +178,6 @@ Enterprise teams store critical records across siloed financial filings, contrac
 
 On every push/PR to `main` or `develop`, `.github/workflows/ci.yml` executes:
 1. **Ruff Lint & Format Check:** Zero lint or formatting violations across `backend/app` and `backend/tests`.
-2. **Pytest Suite (34/34 passing):** Covers auth, tenant isolation, BOLA, file magic-byte rejection, brute-force lockout, token revocation, retrieval, citations, guardrails, and audit logging.
+2. **Pytest Suite (47/47 passing across 7 suites):** Covers auth (8), chat & multi-PDF scoping (5), citations (5), ingestion/OCR/reprocess (10), retrieval/complete-policy filtering (9), security hardening/guardrails/audit (9), and cross-tenant isolation (1).
 3. **Docker Build Validation:** Verifies both `backend` (Python 3.12 non-root image) and `frontend` (Next.js 15 Node 20 image) build cleanly.
 4. **RAG Benchmark Regression Gate:** Enforces faithfulness $\ge 0.85$ (`python eval/run_eval.py --version v3 --ci-gate --min-faithfulness 0.85`).

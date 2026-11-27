@@ -11,26 +11,26 @@ Target outcome: a live, Dockerized, authenticated, security-hardened, and monito
 
 ## 0.1 The Product in One Paragraph
 
-An organization signs up via `/api/v1/auth/register`. Team members upload PDF, DOCX, XLSX, TXT, and Markdown files (annual reports, contracts, policy manuals, financial sheets). Uploads undergo MIME, magic-byte, Zip-bomb, and SHA-256 deduplication checks before streaming to S3-compatible storage and running asynchronously on Celery workers. Any team member can ask natural-language questions over private SSE-streamed chat sessions and receive grounded answers with **inline citations `[1]`, `[2]` mapped to exact documents, sections, and page numbers**. Tenant isolation is enforced in SQL, JWT claims, Redis cache keys, and PostgreSQL RLS session bindings. Admins govern member access, monthly token budgets, and immutable security audit logs, while every request is traced in Langfuse v4, metered in Prometheus/Grafana, and gated in CI.
+An organization signs up via `/api/v1/auth/register`. Team members upload PDF (native, scanned, or hybrid with embedded images), DOCX, XLSX, TXT, and Markdown files. Uploads undergo MIME, magic-byte, Zip-bomb, and SHA-256 deduplication checks before streaming to S3-compatible storage and running asynchronously on Celery workers with high-DPI `RapidOCR` scan extraction and atomic Re-OCR reprocessing. Team members use checkboxes in `/documents` or `/chat` to scope sessions strictly to 1, 2, 3, or all PDFs and receive grounded SSE-streamed answers with **inline citations `[1]`, `[2]` mapped to exact documents, sections, and page numbers**. Tenant isolation is enforced in SQL, JWT claims, Redis cache keys, and PostgreSQL RLS session bindings. Admins govern member access, monthly token budgets, and immutable security audit logs, while every request is traced in Langfuse v4, metered in Prometheus/Grafana, and gated in CI.
 
 ## 0.2 Engineering Questions This Project Answers
 
 | Interview Question | Implemented DocIntel Feature |
 |---|---|
 | "Have you built a real backend?" | Async FastAPI + Pydantic v2 + PostgreSQL 16 + Alembic + JWT rotation/revocation + RBAC |
-| "How do you handle long-running work?" | Celery workers + Redis broker + exponential backoff retries + `/status` polling |
-| "Can you do more than cosine similarity?" | Hybrid Dense (`pgvector` HNSW) + Sparse (`tsvector` BM25) + RRF ($k=60$) + `bge-reranker-v2-m3` |
+| "How do you handle long-running work & scans?" | Celery workers + Redis broker + `RapidOCR` high-DPI & painted-image OCR + `/reprocess` (Re-OCR) + `/status` |
+| "Can you do more than cosine similarity?" | Scoped Complete-Policy Mode (`<=30` chunks) + Hybrid Dense (`pgvector` HNSW) + Sparse (`tsvector` BM25) + RRF ($k=60$) + `bge-reranker-v2-m3` |
 | "How do you evaluate RAG quality?" | 50-question golden dataset + `eval/run_eval.py` across v1/v2/v3 + CI faithfulness gate ($\ge 0.85$) |
-| "How do you control LLM cost & resilience?" | LiteLLM router cascade (`Groq → Gemini → OpenAI → Local Engine`), Redis semantic cache, monthly budgets |
-| "How do you enforce multi-tenancy & security?" | SQL `org_id` + RLS `set_config`, same-org conversation BOLA checks, magic-byte validation, PII redaction, audit logs |
+| "How do you control LLM cost & resilience?" | LiteLLM router cascade (`Groq → Gemini → OpenAI → Local Engine`), scoped Redis semantic cache, monthly budgets |
+| "How do you enforce multi-tenancy & security?" | SQL `org_id` + `document_ids` isolation + RLS `set_config`, same-org BOLA checks, magic-byte validation, PII redaction, audit logs |
 | "Can you deploy and operate it?" | Dual `docker-compose` (Dev + GCP Prod with Nginx TLS), Prometheus/Grafana, Langfuse v4 OTel traces, JSON logs |
-| "Do you test your code?" | **34 pytest integration & security tests** + GitHub Actions CI (Ruff + Pytest + Docker + RAG Gate) |
+| "Do you test your code?" | **47 pytest integration, OCR, scoping & security tests** + GitHub Actions CI (Ruff + Pytest + Docker + RAG Gate) |
 
 ## 0.3 Production Readiness Checklist
 
 - [x] Runs locally via `docker compose up -d` and in production via `docker compose -f docker-compose.prod.yml up -d`
 - [x] `README.md`, `PROJECT_EXPLAINED.md`, `ARCHITECTURE.md`, and `EVALUATION.md` synchronized with codebase
-- [x] **34 automated pytest tests** passing across 7 suites (`test_auth`, `test_chat`, `test_citations`, `test_ingestion`, `test_retrieval`, `test_security`, `test_tenant_isolation`)
+- [x] **47 automated pytest tests** passing across 7 suites (`test_auth` 8, `test_chat` 5, `test_citations` 5, `test_ingestion` 10, `test_retrieval` 9, `test_security` 9, `test_tenant_isolation` 1)
 - [x] Security hardened (HTTP headers, SlowAPI limits, Redis login lockout, JWT `jti` revocation, magic bytes, prompt-injection & PII guardrails, immutable `audit_logs`, fail-fast prod secrets)
 - [x] `.env.example`, `.env.prod.example`, and automated Google Cloud deploy script ([`deploy/gcp/deploy.sh`](deploy/gcp/deploy.sh))
 
@@ -72,7 +72,7 @@ An organization signs up via `/api/v1/auth/register`. Team members upload PDF, D
     ┌──────────────────────────┐                       │ Langfuse v4│
     │   Celery Workers         │                       │ OTel trace │
     │ 1. download from S3      │                       └────────────┘
-    │ 2. parse layout & tables │
+    │ 2. parse layout + OCR    │
     │ 3. chunk (layout-aware)  │                       ┌────────────┐
     │ 4. embed (bge-small 384d)│                       │ Prometheus │
     │ 5. upsert to pgvector    │                       │ + Grafana  │
@@ -89,20 +89,16 @@ An organization signs up via `/api/v1/auth/register`. Team members upload PDF, D
 ```text
 User question + chat history + Bearer JWT (verified JTI & RLS org context)
    │
-   ├─▶ [0] Security checks: SlowAPI (30/min), prompt-injection detector, monthly token budget gate
+   ├─▶ [0] Security checks: SlowAPI (30/min), prompt-injection detector, monthly token budget gate, multi-PDF scope check
    │
-   ├─▶ [1] Tenant-isolated Redis Semantic Cache (cosine > 0.97) ──hit──▶ stream cached response
+   ├─▶ [1] Scoped Redis Semantic Cache (org + sorted document_ids, cosine > 0.97) ──hit──▶ stream cached response
    │
-   ├─▶ [2] QueryRewriter: coreference resolution for follow-ups → standalone query
+   ├─▶ [2] Scoped Complete-Policy Mode (if pinned PDFs fit <= 30 chunks & <= 12,000 tokens): read full PDFs in order
    │
-   ├─▶ [3] Multi-query expansion: up to 3 query variations for broader recall
-   │
-   ├─▶ [4] Sequential AsyncSession-safe hybrid search per query (WHERE org_id = :org_id):
-   │         • Dense:  pgvector HNSW cosine distance, top 20
-   │         • Sparse: Postgres ts_rank_cd over (section_title || content_tsv), top 20
-   │         └─ fuse with Reciprocal Rank Fusion (k=60) → top 30 unique chunks
-   │
-   ├─▶ [5] Cross-Encoder Re-ranker (BAAI/bge-reranker-v2-m3 + lexical/table fallback) → top 6
+   ├─▶ [3] Otherwise Hybrid Retrieval (QueryRewriter + Multi-query, WHERE org_id = :org_id [+ document_ids]):
+   │         • Dense:  pgvector HNSW cosine distance
+   │         • Sparse: Postgres ts_rank_cd over (section_title || content_tsv) (+ ILIKE fallback)
+   │         └─ fuse with Reciprocal Rank Fusion (k=60) → Cross-Encoder Re-ranker (bge-reranker-v2-m3) + neighbors
    │
    ├─▶ [6] Context assembly: strip invisible Unicode markers, redact PII/keys, fence in <retrieved_context>
    │
@@ -127,13 +123,13 @@ User question + chat history + Bearer JWT (verified JTI & RLS org context)
 | **ORM & Migrations** | SQLAlchemy 2.0 (async) + Alembic | Async sessions (`AsyncSessionLocal`) & schema versioning |
 | **Queue & Cache** | Celery + Redis 7 (`redis:7-alpine`) | Non-blocking ingestion, semantic cache, lockouts & JWT revocation |
 | **Object Storage** | SeaweedFS S3 (`minio` service) / GCS HMAC in GCP | S3 API via `boto3` + traversal-guarded local fallback |
-| **Parsing & Chunking** | `PyMuPDF` (`fitz`), `python-docx`, `openpyxl` + `LayoutChunker` | Extracts Markdown tables & sections (`700` tokens / `100` overlap) |
+| **Parsing, OCR & Chunking** | `PyMuPDF` (`fitz`), `RapidOCR` + OpenCV/Pillow, `DOCX`/`XLSX` + `LayoutChunker` | High-DPI / raw-stream OCR for scans, tables & page-bounded chunks (`700`/`100`) |
 | **Embeddings & Re-rank** | `BAAI/bge-small-en-v1.5` (`fastembed`/`SentenceTransformer`) + `BAAI/bge-reranker-v2-m3` | Local 384d bi-encoder + cross-encoder precision with offline fallbacks |
 | **LLM Gateway** | `LiteLLM` waterfall + Local Grounded Engine | Groq → Gemini → OpenAI → deterministic extractive synthesis |
 | **Tracing & Metrics** | **Langfuse v4** OTel + Prometheus + Grafana | `SPAN`/`RETRIEVER`/`GENERATION` traces, latency histograms & dashboards |
-| **Frontend** | Next.js 15 + React 19 + TypeScript + Tailwind CSS | SSE streaming chat, citation drawer, vault, team admin & offboarding UI |
+| **Frontend** | Next.js 15 + React 19 + TypeScript + Tailwind CSS | SSE chat with multi-PDF checkboxes, citation drawer, Re-OCR vault & admin UI |
 | **Security & Auth** | JWT (`jti` + refresh rotation), `bcrypt`, `guardrails.py`, `AuditLog` | End-to-end enterprise defense-in-depth |
-| **CI/CD & Eval** | GitHub Actions (Ruff, Pytest 34 tests, Docker, Eval Gate) | Automated quality & faithfulness ($\ge 0.85$) enforcement |
+| **CI/CD & Eval** | GitHub Actions (Ruff, Pytest 47 tests, Docker, Eval Gate) | Automated quality & faithfulness ($\ge 0.85$) enforcement |
 | **Deployment** | `docker-compose.yml` (Dev) & `docker-compose.prod.yml` + Nginx TLS + GCE script | Secure local dev + 1-command Google Cloud Compute Engine launch |
 
 ---
@@ -162,8 +158,8 @@ DocIntel/
 │   │   ├── deps.py                   # AsyncSession, JWT revocation check, Postgres RLS context
 │   │   ├── api/v1/
 │   │   │   ├── auth.py               # register, login, refresh, logout, me
-│   │   │   ├── documents.py          # validated upload, list, status, detail, delete
-│   │   │   ├── chat.py               # conversations CRUD & SSE /ask with BOLA + guardrails
+│   │   │   ├── documents.py          # validated upload, list, status, detail, /reprocess (Re-OCR), delete
+│   │   │   ├── chat.py               # conversations CRUD (w/ document_ids) & SSE /ask w/ guardrails
 │   │   │   ├── admin.py              # usage, budget, members invite/delete, audit-logs
 │   │   │   ├── health.py             # /health, leak-free /ready
 │   │   │   └── router.py             # /api/v1 router registration
@@ -172,16 +168,16 @@ DocIntel/
 │   │   ├── schemas/                  # Pydantic v2 DTOs + strict email/password validation
 │   │   ├── scripts/                  # seed.py, reindex_embeddings.py
 │   │   ├── services/                 # auth_service, audit, budget, cache, chunking, embeddings,
-│   │   │                             # generation, guardrails, parsing, retrieval, storage
+│   │   │                             # generation, guardrails, ocr, parsing, retrieval, storage
 │   │   ├── static/index.html         # Dev-only standalone web dashboard
-│   │   └── workers/                  # celery_app.py, tasks.py
-│   └── tests/                        # 34 passing automated pytest tests
+│   │   └── workers/                  # celery_app.py, tasks.py (atomic chunk replacement)
+│   └── tests/                        # 47 passing automated pytest tests
 │       ├── conftest.py               # Async Postgres test fixtures & two-tenant seed
 │       ├── test_auth.py              # Auth, RBAC & member offboarding (8 tests)
-│       ├── test_chat.py              # Conversations, SSE & budget 429 enforcement (3 tests)
-│       ├── test_citations.py         # Citation matching & hallucination removal (4 tests)
-│       ├── test_ingestion.py         # Upload, idempotency, LayoutChunker (4 tests)
-│       ├── test_retrieval.py         # Configs, RRF fusion, cache & query rewriter (5 tests)
+│       ├── test_chat.py              # Conversations, multi-PDF scope, SSE & budget (5 tests)
+│       ├── test_citations.py         # Citation matching & hallucination removal (5 tests)
+│       ├── test_ingestion.py         # Upload, OCR scans, shared XObject, /reprocess (10 tests)
+│       ├── test_retrieval.py         # Complete-doc scope, subset filter, RRF & cache (9 tests)
 │       ├── test_security.py          # Headers, magic bytes, BOLA, lockout, guardrails, audit (9 tests)
 │       └── test_tenant_isolation.py  # Cross-tenant zero-leak end-to-end test (1 test)
 │
@@ -232,7 +228,8 @@ chunks(id uuid pk, document_id fk->documents ON DELETE CASCADE, org_id fk->organ
   INDEX ix_chunks_embedding_hnsw USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=64)
 
 -- Conversational RAG History
-conversations(id uuid pk, org_id fk, user_id fk ON DELETE CASCADE, title, created_at, updated_at)
+conversations(id uuid pk, org_id fk, user_id fk ON DELETE CASCADE, title,
+              document_ids jsonb null, created_at, updated_at)
 
 messages(id uuid pk, conversation_id fk ON DELETE CASCADE, role enum('user','assistant'),
          content text, citations jsonb, prompt_tokens int, completion_tokens int,
@@ -286,4 +283,4 @@ def reciprocal_rank_fusion(
 
 * **Local Development:** `docker compose up -d --build` runs the 8-container stack (PostgreSQL + pgvector, Redis, SeaweedFS S3, FastAPI API, Celery Worker, Prometheus, Grafana, Next.js Frontend).
 * **Production / Google Cloud:** [`deploy/gcp/deploy.sh`](deploy/gcp/deploy.sh) prepares an Ubuntu Compute Engine VM (`e2-standard-2` recommended), opens only `22`/`80`/`443` via UFW, generates cryptographic secrets into `.env` (`chmod 600`), provisions Let's Encrypt HTTPS certificates when a domain is supplied, and runs `docker-compose.prod.yml` behind hardened Nginx.
-* **Test Verification:** `pytest tests/ -v` runs **34 automated integration and security tests** inside the containerized PostgreSQL + pgvector & Redis environment (`34 passed`).
+* **Test Verification:** `pytest tests/ -v` runs **47 automated integration, OCR, multi-PDF scoping, and security tests** inside the containerized PostgreSQL + pgvector & Redis environment (`47 passed`).
