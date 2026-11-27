@@ -33,6 +33,24 @@ export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [reprocessingId, setReprocessingId] = useState<string | null>(null);
+  const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
+
+  const readyDocIds = documents.filter((d) => d.status === "ready").map((d) => d.id);
+  const activeSelectedIds = selectedDocIds.filter((id) => readyDocIds.includes(id));
+
+  const toggleDocSelection = (docId: string) => {
+    setSelectedDocIds((prev) =>
+      prev.includes(docId) ? prev.filter((id) => id !== docId) : [...prev, docId]
+    );
+  };
+
+  const toggleAllReady = () => {
+    if (readyDocIds.length > 0 && activeSelectedIds.length === readyDocIds.length) {
+      setSelectedDocIds([]);
+    } else {
+      setSelectedDocIds(readyDocIds);
+    }
+  };
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -123,9 +141,29 @@ export default function DocumentsPage() {
 
         {/* Documents Table */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-          <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+          <div className="px-6 py-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-sm font-semibold text-slate-200">Indexed Tenant Documents</h2>
-            <span className="text-xs text-slate-400">{documents.length} files tracked</span>
+            <div className="flex items-center space-x-3">
+              {activeSelectedIds.length > 0 && (
+                <div className="inline-flex items-center space-x-2">
+                  <Link
+                    href={`/chat?docs=${activeSelectedIds.join(",")}`}
+                    className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-xs font-semibold transition"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    <span>Ask Selected PDFs ({activeSelectedIds.length})</span>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDocIds([])}
+                    className="text-xs text-slate-400 hover:text-slate-200"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+              <span className="text-xs text-slate-400">{documents.length} files tracked</span>
+            </div>
           </div>
 
           {loading ? (
@@ -140,7 +178,18 @@ export default function DocumentsPage() {
               <table className="w-full text-left text-sm text-slate-300">
                 <thead className="bg-slate-950/50 text-xs uppercase text-slate-500 border-b border-slate-800">
                   <tr>
-                    <th className="px-6 py-3">Document Name</th>
+                    <th className="pl-6 pr-2 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        checked={readyDocIds.length > 0 && activeSelectedIds.length === readyDocIds.length}
+                        disabled={readyDocIds.length === 0}
+                        onChange={toggleAllReady}
+                        aria-label="Select all ready PDFs"
+                        title="Select or clear all ready PDFs"
+                        className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-emerald-500 focus:ring-emerald-500 cursor-pointer disabled:opacity-40"
+                      />
+                    </th>
+                    <th className="px-4 py-3">Document Name</th>
                     <th className="px-6 py-3">Status</th>
                     <th className="px-6 py-3">Pages</th>
                     <th className="px-6 py-3">Chunks</th>
@@ -149,9 +198,21 @@ export default function DocumentsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
-                  {documents.map((doc) => (
+                  {documents.map((doc) => {
+                    const isChecked = activeSelectedIds.includes(doc.id);
+                    return (
                     <tr key={doc.id} className="hover:bg-slate-800/40 transition">
-                      <td className="px-6 py-4 flex items-center space-x-3">
+                      <td className="pl-6 pr-2 py-4">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          disabled={doc.status !== "ready"}
+                          onChange={() => toggleDocSelection(doc.id)}
+                          aria-label={`Select ${doc.filename}`}
+                          className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-emerald-500 focus:ring-emerald-500 cursor-pointer disabled:opacity-40"
+                        />
+                      </td>
+                      <td className="px-4 py-4 flex items-center space-x-3">
                         <div className="p-2 rounded-lg bg-blue-600/10 text-blue-400">
                           <FileText className="h-4 w-4" />
                         </div>
@@ -215,7 +276,8 @@ export default function DocumentsPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

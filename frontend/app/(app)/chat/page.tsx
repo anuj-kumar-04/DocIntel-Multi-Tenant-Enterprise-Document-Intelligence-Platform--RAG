@@ -26,10 +26,18 @@ export default function ChatPage() {
 
   const initializeChat = async () => {
     try {
-      const requestedDocId =
-        typeof window !== "undefined"
-          ? new URLSearchParams(window.location.search).get("doc")
-          : null;
+      const params =
+        typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+      const requestedDocsParam = params?.get("docs");
+      const requestedSingleDoc = params?.get("doc");
+      const rawRequestedIds = requestedDocsParam
+        ? requestedDocsParam
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : requestedSingleDoc
+        ? [requestedSingleDoc]
+        : [];
 
       const [convData, docsData] = await Promise.all([
         apiRequest<ConversationItem[]>("/api/v1/chat/conversations"),
@@ -41,24 +49,30 @@ export default function ChatPage() {
         .map((d) => ({ id: d.id, filename: d.filename, page_count: d.page_count }));
       setDocuments(readyDocs);
 
+      const readyIdSet = new Set(readyDocs.map((d) => d.id));
+      const requestedDocIds = Array.from(new Set(rawRequestedIds.filter((id) => readyIdSet.has(id))));
+
       const list = convData || [];
       setConversations(list);
 
-      if (requestedDocId && readyDocs.some((d) => d.id === requestedDocId)) {
-        const targetDoc = readyDocs.find((d) => d.id === requestedDocId);
+      if (requestedDocIds.length > 0) {
+        const sortedTarget = [...requestedDocIds].sort().join(",");
         const existingScoped = list.find(
-          (c) => c.document_ids && c.document_ids.includes(requestedDocId)
+          (c) =>
+            c.document_ids &&
+            c.document_ids.length > 0 &&
+            [...c.document_ids].sort().join(",") === sortedTarget
         );
         if (existingScoped) {
           await selectConversation(existingScoped.id);
         } else {
-          await createNewConversation([requestedDocId], targetDoc?.filename);
+          await createNewConversation(requestedDocIds, readyDocs);
         }
       } else if (list.length > 0 && !activeConvId) {
         await selectConversation(list[0].id);
       } else if (list.length === 0) {
-        const defaultIds = readyDocs.length > 0 ? [readyDocs[0].id] : undefined;
-        await createNewConversation(defaultIds, readyDocs[0]?.filename);
+        const defaultIds = readyDocs.length === 1 ? [readyDocs[0].id] : undefined;
+        await createNewConversation(defaultIds, readyDocs);
       }
     } catch (e) {
       console.error(e);
@@ -80,11 +94,24 @@ export default function ChatPage() {
     }
   };
 
-  const createNewConversation = async (docIds?: string[], docName?: string) => {
+  const buildScopedTitle = (
+    docIds: string[] | undefined,
+    docList: ScopedDocumentOption[] = documents
+  ) => {
+    if (!docIds || docIds.length === 0) return `Analysis Session ${conversations.length + 1}`;
+    const firstDoc = docList.find((d) => d.id === docIds[0]);
+    if (docIds.length === 1 && firstDoc) {
+      return `PDF: ${firstDoc.filename.slice(0, 40)}`;
+    }
+    return `${docIds.length} PDFs: ${(firstDoc?.filename || "Selected").slice(0, 28)}`;
+  };
+
+  const createNewConversation = async (
+    docIds?: string[],
+    docList: ScopedDocumentOption[] = documents
+  ) => {
     try {
-      const title = docName
-        ? `PDF: ${docName.slice(0, 40)}`
-        : `Analysis Session ${conversations.length + 1}`;
+      const title = buildScopedTitle(docIds, docList);
       const newConv = await apiRequest<ConversationItem>("/api/v1/chat/conversations", {
         method: "POST",
         body: JSON.stringify({
@@ -102,13 +129,26 @@ export default function ChatPage() {
 
   const updateConversationScope = async (convId: string, docIds: string[]) => {
     try {
-      const targetDoc =
-        docIds.length === 1 ? documents.find((d) => d.id === docIds[0]) : undefined;
+      const existing = conversations.find((c) => c.id === convId);
+      const isAutoTitle =
+        !existing ||
+        existing.title.startsWith("Analysis Session") ||
+        existing.title.startsWith("PDF: ") ||
+        /^\d+\s+PDFs?: /.test(existing.title);
+      const nextTitle = isAutoTitle
+        ? docIds.length > 0
+          ? buildScopedTitle(docIds)
+          : "All PDFs Session"
+        : undefined;
+
       const updated = await apiRequest<ConversationItem>(
         `/api/v1/chat/conversations/${convId}`,
         {
           method: "PATCH",
-          body: JSON.stringify({ document_ids: docIds }),
+          body: JSON.stringify({
+            document_ids: docIds,
+            ...(nextTitle ? { title: nextTitle } : {}),
+          }),
         }
       );
       setConversations((prev) =>
@@ -117,7 +157,7 @@ export default function ChatPage() {
             ? {
                 ...c,
                 document_ids: updated.document_ids,
-                title: targetDoc && c.title.startsWith("Analysis Session") ? c.title : c.title,
+                title: updated.title,
               }
             : c
         )
@@ -159,10 +199,7 @@ export default function ChatPage() {
             <button
               onClick={() =>
                 createNewConversation(
-                  currentScopedIds && currentScopedIds.length > 0 ? currentScopedIds : undefined,
-                  currentScopedIds && currentScopedIds.length === 1
-                    ? documents.find((d) => d.id === currentScopedIds[0])?.filename
-                    : undefined
+                  currentScopedIds && currentScopedIds.length > 0 ? currentScopedIds : undefined
                 )
               }
               className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center justify-center space-x-2 transition shadow-sm"
@@ -179,10 +216,9 @@ export default function ChatPage() {
               <div className="p-4 text-center text-xs text-slate-500">No active sessions</div>
             ) : (
               conversations.map((c) => {
-                const pinnedDoc =
-                  c.document_ids && c.document_ids.length === 1
-                    ? documents.find((d) => d.id === c.document_ids?.[0])
-                    : undefined;
+                const pinnedDocs = (c.document_ids || [])
+                  .map((id) => documents.find((d) => d.id === id))
+                  .filter((d): d is ScopedDocumentOption => Boolean(d));
                 return (
                   <div
                     key={c.id}
@@ -198,10 +234,14 @@ export default function ChatPage() {
                         <MessageSquare className="h-4 w-4 shrink-0 text-slate-400" />
                         <span className="truncate font-medium">{c.title}</span>
                       </div>
-                      {pinnedDoc && (
+                      {pinnedDocs.length > 0 && (
                         <div className="mt-1 ml-6 flex items-center space-x-1 text-[10px] text-emerald-400/90 truncate">
                           <Lock className="h-2.5 w-2.5 shrink-0" />
-                          <span className="truncate">{pinnedDoc.filename}</span>
+                          <span className="truncate">
+                            {pinnedDocs.length === 1
+                              ? pinnedDocs[0].filename
+                              : `${pinnedDocs.length} PDFs: ${pinnedDocs.map((d) => d.filename).join(", ")}`}
+                          </span>
                         </div>
                       )}
                     </div>

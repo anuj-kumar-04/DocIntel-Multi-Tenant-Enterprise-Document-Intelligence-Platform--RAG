@@ -153,3 +153,66 @@ async def test_conversation_document_pinning_and_cross_tenant_block(
     )
     assert clear_patch.status_code == 200
     assert clear_patch.json()["document_ids"] is None
+
+
+@pytest.mark.asyncio
+async def test_multi_document_selection_persists_subset_and_rejects_partial_cross_tenant(
+    client: AsyncClient, db_session: AsyncSession, seed_two_tenants
+):
+    """Selecting 2 of 3 tenant PDFs persists exact subset and blocks mixed cross-tenant lists."""
+    tenant_a, tenant_b = seed_two_tenants
+
+    docs_a = [
+        Document(
+            id=uuid.uuid4(),
+            org_id=tenant_a.org.id,
+            filename=f"Subset_{idx}.pdf",
+            s3_key=f"org_{tenant_a.org.id}/Subset_{idx}.pdf",
+            mime_type="application/pdf",
+            size_bytes=1024,
+            page_count=1,
+            chunk_count=0,
+            status=DocumentStatus.READY,
+        )
+        for idx in range(3)
+    ]
+    doc_b = Document(
+        id=uuid.uuid4(),
+        org_id=tenant_b.org.id,
+        filename="OtherTenant.pdf",
+        s3_key=f"org_{tenant_b.org.id}/OtherTenant.pdf",
+        mime_type="application/pdf",
+        size_bytes=1024,
+        page_count=1,
+        chunk_count=0,
+        status=DocumentStatus.READY,
+    )
+    db_session.add_all([*docs_a, doc_b])
+    await db_session.commit()
+
+    subset_ids = [str(docs_a[0].id), str(docs_a[2].id)]
+    res = await client.post(
+        "/api/v1/chat/conversations",
+        json={"title": "2 PDFs: Subset_0", "document_ids": subset_ids},
+        headers=tenant_a.owner_headers,
+    )
+    assert res.status_code == 201
+    conv = res.json()
+    assert conv["document_ids"] == subset_ids
+
+    # Update scope to all 3, then back to 2 selected
+    patch_three = await client.patch(
+        f"/api/v1/chat/conversations/{conv['id']}",
+        json={"document_ids": [str(d.id) for d in docs_a]},
+        headers=tenant_a.owner_headers,
+    )
+    assert patch_three.status_code == 200
+    assert len(patch_three.json()["document_ids"]) == 3
+
+    # Reject mixed list containing another tenant's document
+    mixed_patch = await client.patch(
+        f"/api/v1/chat/conversations/{conv['id']}",
+        json={"document_ids": [str(docs_a[0].id), str(doc_b.id)]},
+        headers=tenant_a.owner_headers,
+    )
+    assert mixed_patch.status_code == 404

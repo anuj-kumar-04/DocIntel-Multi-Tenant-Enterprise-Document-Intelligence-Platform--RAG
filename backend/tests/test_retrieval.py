@@ -218,3 +218,69 @@ async def test_retrieval_strict_pdf_scope_and_complete_policy(db_session, seed_t
         h["document_id"] == str(policy_doc.id) and "unopened bags" in h["content"].lower()
         for h in unscoped_hits
     )
+
+
+@pytest.mark.asyncio
+async def test_multi_document_subset_retrieval_excludes_unselected_docs(
+    db_session, seed_two_tenants
+):
+    """Selecting 2 of 3 tenant PDFs retrieves from both selected PDFs and excludes the 3rd."""
+    tenant_a, _ = seed_two_tenants
+
+    specs = [
+        (
+            "Freight_Terms.pdf",
+            "Warehouse B pallets qualify for a 5% volume rebate under Clause 14.",
+        ),
+        (
+            "Customs_Receipt.pdf",
+            "Demurrage waiver code is WVR-2026-NOV and customs duty is $4,180.50.",
+        ),
+        (
+            "Excluded_Catalog.pdf",
+            "Excluded catalog item: Warehouse B special rebate promo code EXCLUDE-999.",
+        ),
+    ]
+    created_docs = []
+    created_chunks = []
+    for fname, body in specs:
+        doc = Document(
+            id=uuid.uuid4(),
+            org_id=tenant_a.org.id,
+            filename=fname,
+            s3_key=f"org_{tenant_a.org.id}/{fname}",
+            mime_type="application/pdf",
+            size_bytes=512,
+            page_count=1,
+            chunk_count=1,
+            status=DocumentStatus.READY,
+        )
+        created_docs.append(doc)
+        created_chunks.append(
+            Chunk(
+                id=uuid.uuid4(),
+                document_id=doc.id,
+                org_id=tenant_a.org.id,
+                content=body,
+                embedding=embedding_service.embed_query(body),
+                page_number=1,
+                chunk_index=0,
+                section_title=fname,
+                element_type="paragraph",
+                token_count=18,
+            )
+        )
+
+    db_session.add_all(created_docs + created_chunks)
+    await db_session.commit()
+
+    selected_ids = [created_docs[0].id, created_docs[1].id]
+    hits = await RetrievalEngine(db_session).retrieve(
+        question="What are the Warehouse B rebate and customs waiver code?",
+        org_id=tenant_a.org.id,
+        document_ids=selected_ids,
+    )
+    returned_doc_ids = {h["document_id"] for h in hits}
+    assert returned_doc_ids == {str(created_docs[0].id), str(created_docs[1].id)}
+    assert str(created_docs[2].id) not in returned_doc_ids
+    assert all("EXCLUDE-999" not in h["content"] for h in hits)
