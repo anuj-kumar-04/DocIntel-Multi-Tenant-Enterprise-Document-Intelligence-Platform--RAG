@@ -12,7 +12,7 @@ from app.services.embeddings import embedding_service
 from app.services.parsing import DocumentParser
 from app.services.storage import storage_service
 from celery import shared_task
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 
 async def process_document_pipeline(document_id: str | uuid.UUID) -> dict:
@@ -59,7 +59,9 @@ async def process_document_pipeline(document_id: str | uuid.UUID) -> dict:
             texts = [c.content for c in chunk_records]
             embeddings = embedding_service.embed_documents(texts)
 
-            # 8. Bulk create Chunks with denormalized org_id
+            # 8. Atomically replace Chunks with denormalized org_id
+            await session.execute(delete(Chunk).where(Chunk.document_id == document.id))
+
             db_chunks = []
             for c_data, emb in zip(chunk_records, embeddings, strict=False):
                 db_chunk = Chunk(

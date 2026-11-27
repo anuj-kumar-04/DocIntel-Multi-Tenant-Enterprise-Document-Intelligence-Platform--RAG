@@ -12,6 +12,7 @@ from app.services.parsing import DocumentParser, ParsedBlock
 from app.services.retrieval import RetrievalEngine
 from httpx import AsyncClient
 from PIL import Image, ImageDraw, ImageFont
+from sqlalchemy import select
 
 
 @pytest.mark.asyncio
@@ -249,3 +250,181 @@ async def test_scanned_pdf_chunks_searchable_via_hybrid_retrieval(db_session, se
         document_ids=[doc_row.id],
     )
     assert any(h["page_number"] == 2 and "21" in h["content"] for h in hits)
+
+
+def test_shared_xobject_image_not_duplicated_across_pages():
+    """Images declared in shared /Resources/XObject must only OCR on pages where actually drawn."""
+    receipt_png = _render_synthetic_scan_png(
+        [
+            "APPENDIX C RECEIPT",
+            "Container Seal SL-772910-X",
+            "Customs Duty 4180.50 USD",
+        ]
+    )
+
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((72, 72), "Page 1: General freight insurance coverage overview.")
+    p2 = doc.new_page()
+    p2.insert_text((72, 72), "Page 2: Warehouse storage fee schedule and late penalties.")
+    p3 = doc.new_page()
+    p3.insert_text((72, 72), "Page 3: Appendix C Customs Clearance Evidence.")
+    p3.insert_image(fitz.Rect(60, 160, 520, 360), stream=receipt_png)
+
+    # Share Page 3's Resources dictionary onto Pages 1 and 2 without drawing the image on them
+    res_type, res_val = doc.xref_get_key(doc[2].xref, "Resources")
+    assert res_type in ("dict", "xref")
+    doc.xref_set_key(doc[0].xref, "Resources", res_val)
+    doc.xref_set_key(doc[1].xref, "Resources", res_val)
+
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as check_doc:
+        assert len(check_doc[0].get_images(full=True)) > 0
+        assert check_doc[0].get_image_info(xrefs=True) == []
+        assert len(check_doc[2].get_image_info(xrefs=True)) > 0
+
+    blocks, page_count = DocumentParser.parse_pdf(pdf_bytes)
+    assert page_count == 3
+
+    p1_text = " ".join(b.content for b in blocks if b.page_number == 1)
+    p2_text = " ".join(b.content for b in blocks if b.page_number == 2)
+    p3_text = " ".join(b.content for b in blocks if b.page_number == 3)
+
+    assert "SL-772910" not in p1_text
+    assert "SL-772910" not in p2_text
+    assert "4180.50" not in p1_text
+    assert "4180.50" not in p2_text
+    assert "4180.50" in p3_text
+    assert "SL-772910" in p3_text
+
+
+@pytest.mark.asyncio
+async def test_reprocess_document_endpoint_clears_stale_chunks_and_isolates_tenants(
+    client: AsyncClient, db_session, seed_two_tenants, monkeypatch
+):
+    """Reprocess clears stale chunks, queues ingestion cleanly, and rejects cross-tenant access."""
+    tenant_a, tenant_b = seed_two_tenants
+    dispatched: list[str] = []
+
+    async def _noop_invalidate(_org_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "app.api.v1.documents.ingest_document.delay",
+        lambda doc_id: dispatched.append(doc_id),
+    )
+    monkeypatch.setattr("app.api.v1.documents.semantic_cache.invalidate_org", _noop_invalidate)
+
+    doc_row = Document(
+        id=uuid.uuid4(),
+        org_id=tenant_a.org.id,
+        filename="stale_scan.pdf",
+        s3_key=f"org_{tenant_a.org.id}/stale_scan.pdf",
+        mime_type="application/pdf",
+        size_bytes=1234,
+        page_count=3,
+        chunk_count=2,
+        status=DocumentStatus.READY,
+    )
+    db_session.add(doc_row)
+    await db_session.flush()
+
+    stale_chunks = [
+        Chunk(
+            document_id=doc_row.id,
+            org_id=tenant_a.org.id,
+            content="Old pre-OCR page 1 text",
+            embedding=embedding_service.embed_query("Old pre-OCR page 1 text"),
+            page_number=1,
+            chunk_index=i,
+            element_type="paragraph",
+            token_count=6,
+        )
+        for i in range(2)
+    ]
+    db_session.add_all(stale_chunks)
+    await db_session.commit()
+
+    # Cross-tenant user receives 404
+    cross_res = await client.post(
+        f"/api/v1/documents/{doc_row.id}/reprocess",
+        headers=tenant_b.owner_headers,
+    )
+    assert cross_res.status_code == 404
+
+    # Owner triggers reprocess -> 202, stale chunks cleared, Celery dispatched
+    res = await client.post(
+        f"/api/v1/documents/{doc_row.id}/reprocess",
+        headers=tenant_a.owner_headers,
+    )
+    assert res.status_code == 202
+    payload = res.json()
+    assert payload["document_id"] == str(doc_row.id)
+    assert payload["status"] == "queued"
+    assert dispatched == [str(doc_row.id)]
+
+    remaining = (
+        (await db_session.execute(select(Chunk).where(Chunk.document_id == doc_row.id)))
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+    # Attempting to reprocess while parsing returns 409 Conflict
+    doc_row.status = DocumentStatus.PARSING
+    await db_session.commit()
+    busy_res = await client.post(
+        f"/api/v1/documents/{doc_row.id}/reprocess",
+        headers=tenant_a.owner_headers,
+    )
+    assert busy_res.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_pipeline_replaces_chunks_idempotently(db_session, seed_two_tenants, monkeypatch):
+    """Running process_document_pipeline twice replaces prior chunks without duplicates."""
+    from app.workers import tasks as worker_tasks
+    from tests.conftest import TestingSessionLocal
+
+    tenant_a, _ = seed_two_tenants
+    scan_png = _render_synthetic_scan_png(["WVR-2026-NOV", "Demurrage Waiver Valid"])
+    pdf_doc = fitz.open()
+    page = pdf_doc.new_page()
+    page.insert_image(fitz.Rect(50, 100, 520, 320), stream=scan_png)
+    pdf_bytes = pdf_doc.tobytes()
+    pdf_doc.close()
+
+    doc_row = Document(
+        id=uuid.uuid4(),
+        org_id=tenant_a.org.id,
+        filename="idempotent_ocr.pdf",
+        s3_key=f"org_{tenant_a.org.id}/idempotent_ocr.pdf",
+        mime_type="application/pdf",
+        size_bytes=len(pdf_bytes),
+        status=DocumentStatus.QUEUED,
+    )
+    db_session.add(doc_row)
+    await db_session.commit()
+
+    async def _noop_invalidate(_org_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(worker_tasks, "AsyncSessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(worker_tasks.storage_service, "download_file", lambda _key: pdf_bytes)
+    monkeypatch.setattr(worker_tasks.semantic_cache, "invalidate_org", _noop_invalidate)
+
+    first = await worker_tasks.process_document_pipeline(doc_row.id)
+    second = await worker_tasks.process_document_pipeline(doc_row.id)
+    assert first["status"] == "ready"
+    assert second["status"] == "ready"
+    assert first["chunks"] == second["chunks"]
+
+    stored_chunks = (
+        (await db_session.execute(select(Chunk).where(Chunk.document_id == doc_row.id)))
+        .scalars()
+        .all()
+    )
+    assert len(stored_chunks) == second["chunks"]
+    assert any("WVR-2026-NOV" in c.content for c in stored_chunks)

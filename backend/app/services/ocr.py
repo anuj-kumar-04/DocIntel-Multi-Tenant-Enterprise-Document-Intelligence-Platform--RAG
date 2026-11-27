@@ -148,18 +148,20 @@ def _preprocess_for_ocr(rgb: np.ndarray) -> np.ndarray:
 
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
 
-    # Detect impulse/speckle noise by comparing raw grayscale against 3x3 median
+    # Detect impulse/speckle noise and denoise only when speckled; preserve crisp clean glyphs
     med = cv2.medianBlur(gray, 3)
     diff = cv2.absdiff(gray, med)
     noisy_fraction = float(np.count_nonzero(diff > 28)) / float(gray.size)
     if noisy_fraction > 0.008:
         gray = med
-    else:
-        gray = cv2.bilateralFilter(gray, d=5, sigmaColor=35, sigmaSpace=35)
 
-    # Local contrast normalization handles faint ink and uneven scan lighting
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(gray)
+    # Apply CLAHE only on faded/low-contrast scans so crisp high-contrast text stays razor-sharp
+    dynamic_range = float(np.percentile(gray, 95) - np.percentile(gray, 5))
+    enhanced = (
+        cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+        if dynamic_range < 130.0
+        else gray
+    )
 
     angle = _estimate_skew_angle(enhanced)
     if angle != 0.0:

@@ -9,6 +9,7 @@ from app.config import settings
 from app.core.errors import ResourceNotFoundError
 from app.core.logging import logger
 from app.deps import get_current_user, get_db
+from app.models.chunk import Chunk
 from app.models.document import Document, DocumentStatus
 from app.models.user import User
 from app.schemas.document import (
@@ -31,7 +32,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -200,9 +201,22 @@ async def upload_document(
     )
 
     # 5. Dispatch background task: Celery primary, FastAPI background task fallback
+    _dispatch_ingestion(background_tasks, document.id)
+
+    return DocumentUploadResponse(
+        document_id=document.id,
+        filename=document.filename,
+        status=document.status,
+        message="Document uploaded successfully. Ingestion in progress.",
+        is_duplicate=False,
+    )
+
+
+def _dispatch_ingestion(background_tasks: BackgroundTasks, document_id: uuid.UUID) -> None:
+    """Enqueue document ingestion via Celery, falling back to FastAPI background tasks."""
     enqueued_celery = False
     try:
-        ingest_document.delay(str(document.id))
+        ingest_document.delay(str(document_id))
         enqueued_celery = True
     except Exception as e:
         logger.warning(
@@ -219,15 +233,7 @@ async def upload_document(
                     f"Background ingestion ended with handled error for {doc_id_str}: {bg_exc}"
                 )
 
-        background_tasks.add_task(_safe_background_ingest, str(document.id))
-
-    return DocumentUploadResponse(
-        document_id=document.id,
-        filename=document.filename,
-        status=document.status,
-        message="Document uploaded successfully. Ingestion in progress.",
-        is_duplicate=False,
-    )
+        background_tasks.add_task(_safe_background_ingest, str(document_id))
 
 
 @router.get("", response_model=list[DocumentListItemResponse])
@@ -331,3 +337,61 @@ async def delete_document(
         request=request,
     )
     return None
+
+
+@router.post(
+    "/{document_id}/reprocess",
+    response_model=DocumentUploadResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def reprocess_document(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-run document parsing, OCR, chunking, and embedding for an existing document."""
+    stmt = select(Document).where(
+        Document.id == document_id,
+        Document.org_id == current_user.org_id,  # Strict tenant isolation
+    )
+    result = await db.execute(stmt)
+    doc = result.scalars().first()
+    if not doc:
+        raise ResourceNotFoundError("Document", str(document_id))
+
+    if doc.status in (DocumentStatus.PARSING, DocumentStatus.EMBEDDING):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Document '{doc.filename}' is already {doc.status.value}.",
+        )
+
+    await db.execute(delete(Chunk).where(Chunk.document_id == doc.id))
+    doc.status = DocumentStatus.QUEUED
+    doc.chunk_count = 0
+    doc.error_message = None
+    doc.processed_at = None
+    await db.commit()
+    await db.refresh(doc)
+    await semantic_cache.invalidate_org(str(current_user.org_id))
+
+    await AuditService(db).log_event(
+        action="DOCUMENT_REPROCESSED",
+        resource_type="document",
+        org_id=current_user.org_id,
+        user_id=current_user.id,
+        resource_id=str(doc.id),
+        details={"filename": doc.filename},
+        request=request,
+    )
+
+    _dispatch_ingestion(background_tasks, doc.id)
+
+    return DocumentUploadResponse(
+        document_id=doc.id,
+        filename=doc.filename,
+        status=doc.status,
+        message="Document queued for re-indexing and OCR extraction.",
+        is_duplicate=False,
+    )

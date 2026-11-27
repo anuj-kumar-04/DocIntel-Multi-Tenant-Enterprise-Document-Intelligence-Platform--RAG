@@ -59,10 +59,11 @@ class DocumentParser:
         native_char_count: int,
         native_text_joined: str,
     ) -> list[str]:
-        """Run high-DPI OCR on low-text scanned pages or significant embedded raster images."""
-        images = page.get_images(full=True)
+        """Run high-DPI OCR on low-text scanned pages or painted embedded raster images."""
+        # Use get_image_info(xrefs=True) so shared /Resources XObjects not drawn on this page are ignored
+        painted_images = page.get_image_info(xrefs=True)
         needs_full_page_ocr = native_char_count < _MIN_NATIVE_TEXT_CHARS
-        if not needs_full_page_ocr and not images:
+        if not needs_full_page_ocr and not painted_images:
             return []
 
         ocr_segments: list[str] = []
@@ -76,57 +77,66 @@ class DocumentParser:
             except Exception as e:
                 logger.warning(f"Full-page OCR failed on page {page_number}: {e}")
         else:
-            # Hybrid page: native text exists alongside embedded raster images (scans/receipts/figures)
-            seen_xrefs: set[int] = set()
-            fallback_full_page = False
-
-            for img_info in images:
-                xref = int(img_info[0])
-                if xref in seen_xrefs:
+            # Hybrid page: extract only non-decorative raster images actually painted on this page
+            seen_keys: set[tuple[int, int, int]] = set()
+            for img_info in painted_images:
+                xref = int(img_info.get("xref") or 0)
+                width = int(img_info.get("width") or 0)
+                height = int(img_info.get("height") or 0)
+                bbox = img_info.get("bbox")
+                if not bbox:
                     continue
-                seen_xrefs.add(xref)
 
-                width = int(img_info[2] or 0)
-                height = int(img_info[3] or 0)
-                rects = page.get_image_rects(xref)
+                rect = fitz.Rect(bbox)
+                if (
+                    rect.width < _MIN_HYBRID_RECT_PT
+                    and rect.height < _MIN_HYBRID_RECT_PT
+                    and width < _MIN_HYBRID_IMAGE_PX
+                    and height < _MIN_HYBRID_IMAGE_PX
+                ):
+                    continue
 
-                if rects:
-                    for rect in rects:
-                        if (
-                            rect.width < _MIN_HYBRID_RECT_PT
-                            and rect.height < _MIN_HYBRID_RECT_PT
-                            and width < _MIN_HYBRID_IMAGE_PX
-                            and height < _MIN_HYBRID_IMAGE_PX
-                        ):
-                            continue
-                        try:
-                            pix = page.get_pixmap(clip=rect, dpi=_OCR_RENDER_DPI, alpha=False)
-                            extracted = ocr_service.extract_text_from_image(pix.tobytes("png"))
-                            if extracted:
-                                ocr_segments.append(extracted)
-                        except Exception as e:
-                            logger.debug(
-                                f"Clip OCR failed for image xref={xref} on page {page_number}: {e}"
-                            )
-                elif width >= _MIN_HYBRID_IMAGE_PX or height >= _MIN_HYBRID_IMAGE_PX:
+                dedup_key = (xref, int(round(rect.x0)), int(round(rect.y0)))
+                if dedup_key in seen_keys:
+                    continue
+                seen_keys.add(dedup_key)
+
+                # Prefer raw unresampled image stream when unmasked & axis-aligned to avoid DPI blur
+                transform = img_info.get("transform") or (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+                is_axis_aligned = (
+                    abs(float(transform[1])) < 1e-3
+                    and abs(float(transform[2])) < 1e-3
+                    and float(transform[0]) > 0
+                    and float(transform[3]) > 0
+                )
+                has_mask = bool(img_info.get("has-mask"))
+                extracted = ""
+
+                if (
+                    xref > 0
+                    and not has_mask
+                    and is_axis_aligned
+                    and (width >= 300 or height >= 150)
+                ):
                     try:
                         raw_img = doc.extract_image(xref)
                         img_bytes = raw_img.get("image") if raw_img else None
                         if img_bytes:
                             extracted = ocr_service.extract_text_from_image(img_bytes)
-                            if extracted:
-                                ocr_segments.append(extracted)
-                    except Exception:
-                        fallback_full_page = True
+                    except Exception as e:
+                        logger.debug(
+                            f"Direct XObject extract skipped for xref={xref} p.{page_number}: {e}"
+                        )
 
-            if fallback_full_page and not ocr_segments:
-                try:
-                    pix = page.get_pixmap(dpi=_OCR_RENDER_DPI, alpha=False)
-                    extracted = ocr_service.extract_text_from_image(pix.tobytes("png"))
-                    if extracted:
-                        ocr_segments.append(extracted)
-                except Exception as e:
-                    logger.debug(f"Fallback full-page OCR failed on page {page_number}: {e}")
+                if not extracted:
+                    try:
+                        pix = page.get_pixmap(clip=rect, dpi=_OCR_RENDER_DPI, alpha=False)
+                        extracted = ocr_service.extract_text_from_image(pix.tobytes("png"))
+                    except Exception as e:
+                        logger.debug(f"Clip OCR failed for bbox={bbox} on page {page_number}: {e}")
+
+                if extracted:
+                    ocr_segments.append(extracted)
 
         if not ocr_segments:
             return []

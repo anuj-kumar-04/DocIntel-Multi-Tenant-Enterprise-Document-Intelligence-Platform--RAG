@@ -5,7 +5,17 @@ import Link from "next/link";
 import Navbar from "../../../components/Navbar";
 import UploadDropzone from "../../../components/UploadDropzone";
 import { apiRequest } from "../../../lib/api";
-import { FileText, Trash2, CheckCircle2, Clock, AlertTriangle, Layers, BookOpen, MessageSquare } from "lucide-react";
+import {
+  FileText,
+  Trash2,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  Layers,
+  BookOpen,
+  MessageSquare,
+  RefreshCw,
+} from "lucide-react";
 
 interface DocumentItem {
   id: string;
@@ -22,6 +32,7 @@ interface DocumentItem {
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [reprocessingId, setReprocessingId] = useState<string | null>(null);
 
   const fetchDocuments = useCallback(async () => {
     try {
@@ -52,6 +63,18 @@ export default function DocumentsPage() {
       setDocuments((prev) => prev.filter((d) => d.id !== docId));
     } catch (err: any) {
       alert(`Deletion failed: ${err.message}`);
+    }
+  };
+
+  const handleReprocess = async (docId: string) => {
+    setReprocessingId(docId);
+    try {
+      await apiRequest(`/api/v1/documents/${docId}/reprocess`, { method: "POST" });
+      await fetchDocuments();
+    } catch (err: any) {
+      alert(`Re-OCR failed: ${err.message}`);
+    } finally {
+      setReprocessingId(null);
     }
   };
 
@@ -165,6 +188,23 @@ export default function DocumentsPage() {
                               <span>Ask PDF</span>
                             </Link>
                           )}
+                          <button
+                            onClick={() => handleReprocess(doc.id)}
+                            disabled={
+                              reprocessingId === doc.id ||
+                              doc.status === "parsing" ||
+                              doc.status === "embedding"
+                            }
+                            className="inline-flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 text-xs font-medium transition disabled:opacity-50"
+                            title="Re-run OCR & re-index document"
+                          >
+                            <RefreshCw
+                              className={`h-3.5 w-3.5 ${
+                                reprocessingId === doc.id ? "animate-spin" : ""
+                              }`}
+                            />
+                            <span>Re-OCR</span>
+                          </button>
                           <button
                             onClick={() => handleDelete(doc.id)}
                             className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition"
